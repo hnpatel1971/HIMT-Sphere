@@ -2,11 +2,11 @@ import { type FormEvent, type ReactNode, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import {
-  Activity, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
-  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Download, FileUp, Filter, GraduationCap,
-  Layers, LayoutDashboard, LifeBuoy, LockKeyhole, Map, Menu, MoreHorizontal, Plus, RefreshCw,
-  Route as RouteIcon, Search, Settings2, ShieldCheck, SlidersHorizontal,
-  Sparkles, TrendingUp, Upload, Users, Video, X
+  Activity, Archive, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
+  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Download, Eye, FileSearch, FileUp, Filter, GraduationCap,
+  Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
+  Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
+  Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
 } from 'lucide-react';
 import {
   getGetAnalyticsOverviewQueryKey, getGetCourseQueryKey, getGetDashboardQueryKey,
@@ -63,7 +63,9 @@ function statusTone(status = '') {
 function Shell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const current = [...navItems, ...adminItems].find((item) => item.href === location) || navItems[0];
+  const current = [...navItems, ...adminItems].find((item) =>
+    item.href === '/' ? location === item.href : location === item.href || location.startsWith(item.href + '/')
+  ) || navItems[0];
   return (
     <div className="min-h-[100dvh] bg-background text-foreground">
       <aside className={cx('fixed inset-y-0 left-0 z-40 flex w-[254px] flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 lg:translate-x-0', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
@@ -78,11 +80,11 @@ function Shell({ children }: { children: ReactNode }) {
         </div>
         <div className="px-4 py-6 flex-1 overflow-y-auto">
           <nav className="space-y-1" aria-label="Main navigation">
-            {navItems.map(({ href, label, icon: Icon }) => <NavItem key={href} href={href} label={label} icon={Icon} active={location === href} onNavigate={() => setMobileOpen(false)} />)}
+            {navItems.map(({ href, label, icon: Icon }) => <NavItem key={href} href={href} label={label} icon={Icon} active={href === '/' ? location === href : location === href || location.startsWith(href + '/')} onNavigate={() => setMobileOpen(false)} />)}
           </nav>
           <div className="mt-8 mb-3 h-px bg-sidebar-border" />
           <nav className="space-y-1" aria-label="Operations navigation">
-            {adminItems.map(({ href, label, icon: Icon }) => <NavItem key={href} href={href} label={label} icon={Icon} active={location === href} onNavigate={() => setMobileOpen(false)} />)}
+            {adminItems.map(({ href, label, icon: Icon }) => <NavItem key={href} href={href} label={label} icon={Icon} active={href === '/' ? location === href : location === href || location.startsWith(href + '/')} onNavigate={() => setMobileOpen(false)} />)}
           </nav>
         </div>
         <div className="mt-auto p-4 border-t border-sidebar-border">
@@ -323,8 +325,41 @@ function courseTypeTone(type: string) {
   return 'bg-blue-50 text-blue-700';
 }
 
-// ─── CurriculumPage ───────────────────────────────────────────────────────────
+// ─── CurriculumPage (tile hub) ────────────────────────────────────────────────
+const CURRICULUM_TILES = [
+  { label: 'Groups',        href: '/curriculum/groups',        icon: Users,       color: '#5b6cf9', bg: '#eef0ff' },
+  { label: 'Courses',       href: '/curriculum/courses',       icon: LayoutGrid,  color: '#f59e0b', bg: '#fffbeb' },
+  { label: 'Topic',         href: '/curriculum/topics',        icon: ListChecks,  color: '#14b8a6', bg: '#e6faf8' },
+  { label: 'Contents',      href: '/curriculum/contents',      icon: Layers,      color: '#e11d48', bg: '#fff0f3' },
+  { label: 'Tags',          href: '/curriculum/tags',          icon: Tag,         color: '#4338ca', bg: '#eef0ff' },
+  { label: 'Glossary',      href: '/curriculum/glossary',      icon: FileSearch,  color: '#0ea5e9', bg: '#e6f7ff' },
+  { label: 'Upload Status', href: '/curriculum/upload-status', icon: Upload,      color: '#ef4444', bg: '#fff0f0' },
+  { label: 'Others',        href: '/curriculum/others',        icon: Settings2,   color: '#d97706', bg: '#fffbeb' },
+] as const;
+
 function CurriculumPage() {
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-12">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-5 max-w-[920px]">
+          {CURRICULUM_TILES.map(({ label, href, icon: Icon, color, bg }) => (
+            <Link key={label} href={href}>
+              <div className="flex flex-col items-center justify-center gap-5 rounded-2xl bg-white border border-gray-100 py-10 px-6 cursor-pointer hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 text-center group">
+                <div className="w-[76px] h-[76px] rounded-full flex items-center justify-center" style={{ background: bg }}>
+                  <Icon size={32} style={{ color }} strokeWidth={1.8} />
+                </div>
+                <span className="text-sm text-gray-500 font-medium group-hover:text-gray-800 transition-colors">{label}</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CurriculumCoursesPage (OBE outline builder) ──────────────────────────────
+function CurriculumCoursesPage() {
   const [selectedProgrammeId, setSelectedProgrammeId] = useState('prog-btme');
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>('cur-brm501');
   const [activeTab, setActiveTab] = useState<'overview' | 'structure' | 'mapping'>('overview');
@@ -358,9 +393,16 @@ function CurriculumPage() {
 
   return (
     <div>
+      <div className="mb-5 flex items-center gap-2">
+        <Link href="/curriculum" className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+          <ChevronLeft size={16} /> Curriculum
+        </Link>
+        <ChevronRight size={14} className="text-muted-foreground/50" />
+        <span className="text-sm font-semibold text-foreground">Courses</span>
+      </div>
       <PageHeading
         eyebrow="Academic structure"
-        title="Curriculum"
+        title="Courses"
         description="Manage programme structures, course outlines, learning outcomes and outcome-based mapping."
         action={<Button testId="button-add-co" onClick={() => setAddingCO(true)}><Plus size={16} /> Add outcome</Button>}
       />
@@ -712,7 +754,916 @@ function AddCOModal({ courseId, existingCount, onClose, onSaved, addOutcome }: {
   );
 }
 
-function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+// ─── CurriculumGroupsPage ─────────────────────────────────────────────────────
+type GroupNode = { id: string; name: string; children?: GroupNode[] };
+const GROUPS_SEED: GroupNode[] = [
+  { id: 'g-all-content', name: 'All Content', children: [
+    { id: 'g-marine-eng', name: 'Marine Engineering', children: [] },
+    { id: 'g-nautical-sci', name: 'Nautical Science', children: [] },
+  ]},
+  { id: 'g-all-reports', name: 'All Reports' },
+];
+
+function GroupTreeItem({ node, depth, selected, onSelect, expanded, onToggle }: {
+  node: GroupNode; depth: number; selected: string | null;
+  onSelect: (id: string) => void; expanded: Set<string>; onToggle: (id: string) => void;
+}) {
+  const hasChildren = node.children && node.children.length > 0;
+  const isExpanded = expanded.has(node.id);
+  return (
+    <div>
+      <div
+        onClick={() => onSelect(node.id)}
+        className={cx(
+          'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-blue-50 rounded select-none',
+          selected === node.id && 'bg-blue-50'
+        )}
+        style={{ paddingLeft: `${12 + depth * 20}px` }}
+      >
+        {/* expand toggle */}
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); if (hasChildren) onToggle(node.id); }}
+          className="w-4 h-4 flex items-center justify-center text-gray-400 shrink-0"
+        >
+          {hasChildren
+            ? <ChevronRight size={12} className={cx('transition-transform', isExpanded && 'rotate-90')} />
+            : <span className="w-3" />}
+        </button>
+        {/* radio */}
+        <span className={cx(
+          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+          selected === node.id ? 'border-primary' : 'border-gray-300'
+        )}>
+          {selected === node.id && <span className="h-2 w-2 rounded-full bg-primary" />}
+        </span>
+        <span className="text-sm text-gray-700">{node.name}</span>
+      </div>
+      {hasChildren && isExpanded && (
+        <div>
+          {node.children!.map(child => (
+            <GroupTreeItem key={child.id} node={child} depth={depth + 1}
+              selected={selected} onSelect={onSelect} expanded={expanded} onToggle={onToggle} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CurriculumGroupsPage() {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [showCreate, setShowCreate] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [groups, setGroups] = useState<GroupNode[]>(GROUPS_SEED);
+
+  function toggleExpand(id: string) {
+    setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  function handleCreate(e: FormEvent) {
+    e.preventDefault();
+    if (!newGroupName.trim()) return;
+    setGroups(g => [...g, { id: `g-${Date.now()}`, name: newGroupName.trim() }]);
+    setNewGroupName('');
+    setShowCreate(false);
+  }
+
+  const toolbarBtn = (label: string, icon: ReactNode, onClick?: () => void, disabled = false) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cx(
+        'flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-r border-gray-200 last:border-r-0 transition-colors',
+        disabled ? 'text-gray-300 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+      )}
+    >{icon}{label}</button>
+  );
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+        {/* Back link */}
+        <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+          <ChevronLeft size={18} /> Show all Groups
+        </Link>
+
+        {/* Toolbar */}
+        <div className="flex justify-end">
+          <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white shadow-xs overflow-hidden">
+            {toolbarBtn('Create', <Scissors size={13} />, () => setShowCreate(true))}
+            {toolbarBtn('Edit', <Pencil size={13} />, undefined, !selected)}
+            {toolbarBtn('Delete', <Trash2 size={13} />, undefined, !selected)}
+            {toolbarBtn('Import', <Download size={13} />)}
+            {toolbarBtn('Course Schedule', <CalendarDays size={13} />)}
+            {toolbarBtn('Archived', <Archive size={13} />)}
+          </div>
+        </div>
+
+        {/* Group tree */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs py-2">
+          {groups.map(node => (
+            <GroupTreeItem key={node.id} node={node} depth={0}
+              selected={selected} onSelect={setSelected}
+              expanded={expanded} onToggle={toggleExpand} />
+          ))}
+          {groups.length === 0 && (
+            <p className="px-4 py-6 text-center text-sm text-gray-400">No groups yet. Click Create to add one.</p>
+          )}
+        </div>
+      </div>
+
+      {/* Create group modal */}
+      {showCreate && (
+        <Modal title="Create Group" onClose={() => setShowCreate(false)}>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <Field label="Group name">
+              <input
+                required autoFocus data-testid="input-group-name"
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                placeholder="e.g. Marine Engineering"
+                className="form-input"
+              />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-group" variant="quiet" onClick={() => setShowCreate(false)}>Cancel</Button>
+              <Button testId="button-submit-group" type="submit">Create</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── CurriculumTopicsPage ─────────────────────────────────────────────────────
+type TopicItem = { id: string; name: string; color: string };
+const TOPICS_SEED: TopicItem[] = [
+  { id: 't1', name: 'BRM Phase 2 — 1 Apr to 15 Apr 2023',    color: 'from-blue-400 to-indigo-500' },
+  { id: 't2', name: 'PSCRB 06 Sep 2021',                       color: 'from-teal-400 to-emerald-500' },
+  { id: 't3', name: 'COLREG Navigation — Jan 2024',            color: 'from-violet-400 to-purple-600' },
+  { id: 't4', name: 'ECDIS Passage Planning — Mar 2024',       color: 'from-amber-400 to-orange-500' },
+];
+
+const COURSE_OPTIONS = ['All', 'B.Tech Marine Engineering', 'Diploma Nautical Science', 'B.Sc. Maritime Studies'];
+const LANGUAGE_OPTIONS = ['English', 'Hindi', 'Marathi'];
+
+function CurriculumTopicsPage() {
+  const [search, setSearch]           = useState('');
+  const [userName, setUserName]       = useState('');
+  const [course, setCourse]           = useState('All');
+  const [group, setGroup]             = useState('');
+  const [language, setLanguage]       = useState('English');
+  const [checked, setChecked]         = useState<Set<string>>(new Set());
+  const [topics, setTopics]           = useState<TopicItem[]>(TOPICS_SEED);
+
+  const filtered = topics.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
+
+  function toggleCheck(id: string) {
+    setChecked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  function handleDelete() {
+    if (!checked.size) return;
+    setTopics(t => t.filter(x => !checked.has(x.id)));
+    setChecked(new Set());
+  }
+
+  const tbBtn = (label: string, icon: ReactNode, onClick?: () => void, disabled = false) => (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className={cx('flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-gray-200 rounded-lg transition-colors bg-white',
+        disabled ? 'text-gray-300 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 shadow-xs')}>
+      {icon}{label}
+    </button>
+  );
+
+  const cardBtn = (label: string, icon: ReactNode, onClick?: () => void) => (
+    <button type="button" onClick={onClick}
+      className="flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors shadow-xs">
+      {icon}{label}
+    </button>
+  );
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+
+        {/* Back link */}
+        <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+          <ChevronLeft size={18} /> Show All Topics
+        </Link>
+
+        {/* Toolbar */}
+        <div className="flex justify-end gap-2">
+          {tbBtn('Create',  <Scissors size={13} />)}
+          {tbBtn('Delete',  <Trash2   size={13} />, handleDelete, checked.size === 0)}
+          {tbBtn('Import',  <Download size={13} />)}
+        </div>
+
+        {/* Filter bar */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+            {/* Search */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Search</p>
+              <div className="relative">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  value={search} onChange={e => setSearch(e.target.value)}
+                  placeholder="Search by Name"
+                  className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm text-gray-700 placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
+                />
+              </div>
+            </div>
+            {/* Adaptive User Name */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Adaptive User Name</p>
+              <input value={userName} onChange={e => setUserName(e.target.value)}
+                placeholder="Type Here"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
+              />
+            </div>
+            {/* Course */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Course</p>
+              <select value={course} onChange={e => setCourse(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40">
+                {COURSE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            {/* Group */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Group</p>
+              <input value={group} onChange={e => setGroup(e.target.value)}
+                placeholder="Type Here"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
+              />
+            </div>
+            {/* Language */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Language</p>
+              <select value={language} onChange={e => setLanguage(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40">
+                {LANGUAGE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Topic cards */}
+        <div className="space-y-4">
+          {filtered.length === 0 && (
+            <div className="rounded-xl bg-white border border-gray-100 p-10 text-center text-sm text-gray-400">No topics match your search.</div>
+          )}
+          {filtered.map(topic => (
+            <div key={topic.id} className="relative rounded-xl bg-white border border-gray-100 shadow-xs flex items-stretch overflow-hidden">
+              {/* Thumbnail */}
+              <div className={cx('w-[160px] shrink-0 bg-gradient-to-br flex items-center justify-center', topic.color)}>
+                <GraduationCap size={48} className="text-white/80" strokeWidth={1.2} />
+              </div>
+
+              {/* Name */}
+              <div className="flex flex-1 items-center px-6">
+                <span className="text-base font-semibold text-gray-800">{topic.name}</span>
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-col justify-center gap-2 px-5 py-4 shrink-0">
+                <div className="flex gap-2">
+                  {cardBtn('Edit',   <Pencil  size={12} />)}
+                  {cardBtn('Delete', <Trash2  size={12} />)}
+                </div>
+                <div className="flex gap-2">
+                  {cardBtn('Set Faculty', <GraduationCap size={12} />)}
+                  {cardBtn('Upload TOC',  <FileUp        size={12} />)}
+                </div>
+              </div>
+
+              {/* Checkbox */}
+              <div className="absolute top-3 right-3">
+                <button type="button" onClick={() => toggleCheck(topic.id)}
+                  className={cx('h-4 w-4 rounded border-2 flex items-center justify-center transition-colors',
+                    checked.has(topic.id) ? 'bg-primary border-primary' : 'border-gray-300 bg-white hover:border-primary/50')}>
+                  {checked.has(topic.id) && <Check size={10} className="text-white" strokeWidth={3} />}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─── CurriculumContentsPage ───────────────────────────────────────────────────
+type ContentItem = { id: string; name: string; type: string; color: string; icon: typeof Video };
+const CONTENTS_SEED: ContentItem[] = [
+  { id: 'c1', name: 'Virtual Reality (VR) HIMT',          type: 'VR/AR',      color: 'from-slate-700 to-slate-900',   icon: Video },
+  { id: 'c2', name: 'Augmented Reality (AR) HIMT',        type: 'VR/AR',      color: 'from-slate-600 to-slate-800',   icon: Video },
+  { id: 'c3', name: 'Bridge Simulator — GMDSS Operations', type: 'Simulation', color: 'from-blue-700 to-blue-900',     icon: Video },
+  { id: 'c4', name: 'Fire Fighting Training Video',        type: 'Video',      color: 'from-red-600 to-rose-800',      icon: Video },
+  { id: 'c5', name: 'ECDIS Navigation Manual',             type: 'Document',   color: 'from-teal-600 to-teal-800',     icon: FileUp },
+];
+const RESOURCE_TYPES = ['All', 'Video', 'Document', 'SCORM', 'VR/AR', 'Simulation', 'PDF'];
+
+function CurriculumContentsPage() {
+  const [search, setSearch]       = useState('');
+  const [resType, setResType]     = useState('All');
+  const [course, setCourse]       = useState('All');
+  const [group, setGroup]         = useState('');
+  const [language, setLanguage]   = useState('English');
+  const [checked, setChecked]     = useState<Set<string>>(new Set());
+  const [contents, setContents]   = useState<ContentItem[]>(CONTENTS_SEED);
+
+  const filtered = contents.filter(c =>
+    c.name.toLowerCase().includes(search.toLowerCase()) &&
+    (resType === 'All' || c.type === resType)
+  );
+
+  function toggleCheck(id: string) {
+    setChecked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+  function handleDelete() {
+    if (!checked.size) return;
+    setContents(c => c.filter(x => !checked.has(x.id)));
+    setChecked(new Set());
+  }
+
+  const tbBtn = (label: string, icon: ReactNode, onClick?: () => void, disabled = false) => (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className={cx('flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-gray-200 rounded-lg bg-white shadow-xs transition-colors',
+        disabled ? 'text-gray-300 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900')}>
+      {icon}{label}
+    </button>
+  );
+
+  const cardBtn = (label: string, icon: ReactNode, onClick?: () => void) => (
+    <button type="button" onClick={onClick}
+      className="flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors shadow-xs">
+      {icon}{label}
+    </button>
+  );
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+
+        {/* Back link */}
+        <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+          <ChevronLeft size={18} /> Show All Contents
+        </Link>
+
+        {/* Toolbar */}
+        <div className="flex justify-end gap-2">
+          {tbBtn('Create', <Scissors size={13} />)}
+          {tbBtn('Delete', <Trash2   size={13} />, handleDelete, checked.size === 0)}
+          {tbBtn('Import', <Download size={13} />)}
+        </div>
+
+        {/* Filter bar */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Search</p>
+              <div className="relative">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by Name"
+                  className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40" />
+              </div>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Resource Type</p>
+              <select value={resType} onChange={e => setResType(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40">
+                {RESOURCE_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Course</p>
+              <select value={course} onChange={e => setCourse(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40">
+                {COURSE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Group</p>
+              <input value={group} onChange={e => setGroup(e.target.value)} placeholder="Type Here"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40" />
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-500">Language</p>
+              <select value={language} onChange={e => setLanguage(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40">
+                {LANGUAGE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Content cards */}
+        <div className="space-y-4">
+          {filtered.length === 0 && (
+            <div className="rounded-xl bg-white border border-gray-100 p-10 text-center text-sm text-gray-400">No contents match your filters.</div>
+          )}
+          {filtered.map(item => (
+            <div key={item.id} className="relative rounded-xl bg-white border border-gray-100 shadow-xs flex items-stretch overflow-hidden">
+              {/* Thumbnail */}
+              <div className={cx('w-[140px] shrink-0 bg-gradient-to-br flex items-center justify-center', item.color)}>
+                <item.icon size={36} className="text-white/70" strokeWidth={1.2} />
+              </div>
+              {/* Name */}
+              <div className="flex flex-1 items-center px-6">
+                <div>
+                  <span className="text-base font-semibold text-gray-800">{item.name}</span>
+                  <span className="ml-3 rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">{item.type}</span>
+                </div>
+              </div>
+              {/* Actions */}
+              <div className="flex items-center gap-2 px-5 shrink-0">
+                {cardBtn('Preview', <Eye    size={12} />)}
+                {cardBtn('Edit',    <Pencil size={12} />)}
+                {cardBtn('Delete',  <Trash2 size={12} />)}
+              </div>
+              {/* Checkbox */}
+              <div className="absolute top-3 right-3">
+                <button type="button" onClick={() => toggleCheck(item.id)}
+                  className={cx('h-4 w-4 rounded border-2 flex items-center justify-center transition-colors',
+                    checked.has(item.id) ? 'bg-primary border-primary' : 'border-gray-300 bg-white hover:border-primary/50')}>
+                  {checked.has(item.id) && <Check size={10} className="text-white" strokeWidth={3} />}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─── CurriculumTagsPage ───────────────────────────────────────────────────────
+const TAGS_SEED = [
+  'Bridge Watchkeeping', 'STCW Training', 'Fire Safety', 'ECDIS Navigation',
+  'COLREG Compliance', 'Maritime Law', 'Engine Room Operations',
+  'Environmental Awareness', 'GMDSS Operations', 'Passage Planning',
+];
+
+function CurriculumTagsPage() {
+  const [tags, setTags]           = useState(TAGS_SEED);
+  const [query, setQuery]         = useState('');
+  const [applied, setApplied]     = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [newTag, setNewTag]       = useState('');
+
+  const displayed = tags.filter(t => t.toLowerCase().includes(applied.toLowerCase()));
+
+  function handleGo()   { setApplied(query); }
+  function handleReset(){ setQuery(''); setApplied(''); }
+  function handleDeleteTag(name: string) { setTags(t => t.filter(x => x !== name)); }
+  function handleCreate(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = newTag.trim();
+    if (!trimmed || tags.includes(trimmed)) return;
+    setTags(t => [...t, trimmed]);
+    setNewTag('');
+    setShowCreate(false);
+  }
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+
+        {/* Back link */}
+        <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+          <ChevronLeft size={18} /> Tags
+        </Link>
+
+        {/* Toolbar */}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-gray-200 rounded-lg bg-white shadow-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+            <Scissors size={13} /> Create
+          </button>
+          <button type="button"
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-gray-200 rounded-lg bg-white shadow-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+            <Download size={13} /> Import
+          </button>
+        </div>
+
+        {/* Search card */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 max-w-xs">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleGo()}
+                placeholder="Search by Tag Name"
+                className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
+              />
+            </div>
+            <button type="button" onClick={handleGo}
+              className="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+              Go
+            </button>
+            <button type="button" onClick={handleReset}
+              className="rounded-lg border border-gray-200 bg-white px-5 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+              Reset
+            </button>
+          </div>
+
+          {/* Table */}
+          <div className="mt-5">
+            <div className="grid grid-cols-[1fr_80px] border-b border-primary/20 pb-2 mb-1">
+              <span className="text-xs font-bold text-primary uppercase tracking-wide px-1">Tags Name</span>
+              <span className="text-xs font-bold text-primary uppercase tracking-wide text-right px-1">Actions</span>
+            </div>
+            {displayed.length === 0 && (
+              <p className="py-8 text-center text-sm text-gray-400">No tags match your search.</p>
+            )}
+            {displayed.map((tag, i) => (
+              <div key={tag} className={cx('grid grid-cols-[1fr_80px] items-center py-2.5 px-1', i < displayed.length - 1 && 'border-b border-gray-100')}>
+                <span className="text-sm text-gray-700">{tag}</span>
+                <div className="flex items-center justify-end gap-2">
+                  <button type="button" title="Edit" className="text-gray-400 hover:text-primary transition-colors">
+                    <Pencil size={15} />
+                  </button>
+                  <button type="button" title="Delete" onClick={() => handleDeleteTag(tag)} className="text-gray-400 hover:text-destructive transition-colors">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+
+      {/* Create tag modal */}
+      {showCreate && (
+        <Modal title="Create Tag" onClose={() => setShowCreate(false)}>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <Field label="Tag name">
+              <input required autoFocus data-testid="input-tag-name"
+                value={newTag} onChange={e => setNewTag(e.target.value)}
+                placeholder="e.g. STCW Training"
+                className="form-input" />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-tag" variant="quiet" onClick={() => setShowCreate(false)}>Cancel</Button>
+              <Button testId="button-submit-tag" type="submit">Create</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── CurriculumGlossaryPage ───────────────────────────────────────────────────
+const GLOSSARY_SEED = [
+  { id: 'g1', title: 'STCW', definition: 'Standards of Training, Certification and Watchkeeping for Seafarers' },
+  { id: 'g2', title: 'COLREG', definition: 'Convention on the International Regulations for Preventing Collisions at Sea' },
+  { id: 'g3', title: 'ECDIS', definition: 'Electronic Chart Display and Information System' },
+  { id: 'g4', title: 'GMDSS', definition: 'Global Maritime Distress and Safety System' },
+  { id: 'g5', title: 'OOW', definition: 'Officer of the Watch' },
+  { id: 'g6', title: 'SMS', definition: 'Safety Management System' },
+  { id: 'g7', title: 'ISM Code', definition: 'International Safety Management Code' },
+  { id: 'g8', title: 'MCA', definition: 'Maritime and Coastguard Agency' },
+  { id: 'g9', title: 'Subscribed Product', definition: 'A course or learning product a user is enrolled in' },
+];
+
+function CurriculumGlossaryPage() {
+  const [terms, setTerms]         = useState(GLOSSARY_SEED);
+  const [query, setQuery]         = useState('');
+  const [applied, setApplied]     = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm]           = useState({ title: '', definition: '' });
+
+  const displayed = terms.filter(t => t.title.toLowerCase().includes(applied.toLowerCase()));
+
+  function handleGo()    { setApplied(query); }
+  function handleReset() { setQuery(''); setApplied(''); }
+  function handleDelete(id: string) { setTerms(t => t.filter(x => x.id !== id)); }
+  function handleCreate(e: FormEvent) {
+    e.preventDefault();
+    if (!form.title.trim()) return;
+    setTerms(t => [...t, { id: `g${Date.now()}`, title: form.title.trim(), definition: form.definition.trim() }]);
+    setForm({ title: '', definition: '' });
+    setShowCreate(false);
+  }
+
+  const filledBtn = (label: string, onClick: () => void) => (
+    <button type="button" onClick={onClick}
+      className="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+
+        {/* Back link */}
+        <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+          <ChevronLeft size={18} /> Term
+        </Link>
+
+        {/* Toolbar */}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-gray-200 rounded-lg bg-white shadow-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+            <Scissors size={13} /> Create
+          </button>
+          <button type="button"
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-gray-200 rounded-lg bg-white shadow-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+            <Download size={13} /> Import
+          </button>
+        </div>
+
+        {/* Search card */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 max-w-xs">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={query} onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleGo()}
+                placeholder="Search by Term Title"
+                className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40" />
+            </div>
+            {filledBtn('Go', handleGo)}
+            {filledBtn('Reset', handleReset)}
+          </div>
+
+          {/* Table */}
+          <div className="mt-5">
+            <div className="grid grid-cols-[1fr_80px] border-b border-primary/20 pb-2 mb-1">
+              <span className="text-xs font-bold text-primary uppercase tracking-wide px-1">Term Title</span>
+              <span className="text-xs font-bold text-primary uppercase tracking-wide text-right px-1">Actions</span>
+            </div>
+            {displayed.length === 0 && (
+              <p className="py-8 text-center text-sm text-gray-400">No terms match your search.</p>
+            )}
+            {displayed.map((term, i) => (
+              <div key={term.id} className={cx('grid grid-cols-[1fr_80px] items-center py-2.5 px-1', i < displayed.length - 1 && 'border-b border-gray-100')}>
+                <div>
+                  <span className="text-sm text-gray-700">{term.title}</span>
+                  {term.definition && <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xl">{term.definition}</p>}
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button type="button" title="Edit" className="text-gray-400 hover:text-primary transition-colors"><Pencil size={15} /></button>
+                  <button type="button" title="Delete" onClick={() => handleDelete(term.id)} className="text-gray-400 hover:text-destructive transition-colors"><Trash2 size={15} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+
+      {/* Create term modal */}
+      {showCreate && (
+        <Modal title="Create Term" onClose={() => setShowCreate(false)}>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <Field label="Term title">
+              <input required autoFocus data-testid="input-term-title"
+                value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+                placeholder="e.g. COLREG" className="form-input" />
+            </Field>
+            <Field label="Definition">
+              <textarea data-testid="input-term-definition" rows={3}
+                value={form.definition} onChange={e => setForm(f => ({ ...f, definition: e.target.value }))}
+                placeholder="Full definition of the term…" className="form-input h-auto py-2.5 resize-none" />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-term" variant="quiet" onClick={() => setShowCreate(false)}>Cancel</Button>
+              <Button testId="button-submit-term" type="submit">Create</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── CurriculumUploadStatusPage ───────────────────────────────────────────────
+type UploadRecord = {
+  id: string; video: string; createdDate: string; updatedDate: string;
+  uploadStatus: 'Completed' | 'Processing' | 'Failed' | 'Pending';
+  transcodeStatus: 'Completed' | 'Processing' | 'Failed' | 'Pending';
+  type: string; user: string;
+};
+const UPLOAD_SEED: UploadRecord[] = [
+  { id:'u1',  video:'STCW 2017 Searchable',                   createdDate:'18-Aug-2026 9:00:21 AM',  updatedDate:'18-Aug-2026 9:30:41 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Video',    user:'Admin' },
+  { id:'u2',  video:'Virtual Reality (VR) HIMT',              createdDate:'18-Aug-2026 9:13:12 AM',  updatedDate:'18-Aug-2026 9:28:04 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'VR/AR',    user:'Admin' },
+  { id:'u3',  video:'Augmented Reality (AR) HIMT',            createdDate:'18-Aug-2026 9:12:25 AM',  updatedDate:'18-Aug-2026 9:20:49 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'VR/AR',    user:'Admin' },
+  { id:'u4',  video:'Merchant Shipping Notice No. 07 of 2023',createdDate:'18-Aug-2026 8:59:25 AM',  updatedDate:'18-Aug-2026 9:01:11 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Document', user:'Admin' },
+  { id:'u5',  video:'Engineering Circular No. 143 of 2018',   createdDate:'18-Aug-2026 8:58:43 AM',  updatedDate:'18-Aug-2026 9:00:31 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Document', user:'Admin' },
+  { id:'u6',  video:'STCW OVERVIEW — Aug 2026',               createdDate:'8-Jul-2024 5:25:01 PM',   updatedDate:'18-Aug-2026 8:47:08 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Video',    user:'Faculty' },
+  { id:'u7',  video:'Bridge Simulator — GMDSS Operations',    createdDate:'11-Aug-2026 3:01:37 PM',  updatedDate:'11-Aug-2026 3:03:19 PM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Simulation',user:'Admin' },
+  { id:'u8',  video:'Session 2 — IMSBC Code 2026',            createdDate:'22-Jul-2026 10:30:02 AM', updatedDate:'7-Aug-2026 5:44:34 PM',   uploadStatus:'Completed', transcodeStatus:'Processing',type:'Video',    user:'Faculty' },
+  { id:'u9',  video:'Polar Navigation Session-1',             createdDate:'30-Jul-2026 12:05:42 PM', updatedDate:'30-Jul-2026 4:23:00 PM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Video',    user:'Admin' },
+  { id:'u10', video:'Fire Fighting Training — Module 3',      createdDate:'15-Aug-2026 11:00:00 AM', updatedDate:'15-Aug-2026 11:45:00 AM', uploadStatus:'Processing', transcodeStatus:'Pending',  type:'Video',    user:'Faculty' },
+];
+const UPLOAD_STATUSES  = ['All', 'Completed', 'Processing', 'Failed', 'Pending'] as const;
+const TRANSCODE_STATUSES = ['All', 'Completed', 'Processing', 'Failed', 'Pending'] as const;
+const UPLOAD_TYPES     = ['All', 'Video', 'Document', 'SCORM', 'VR/AR', 'Simulation'];
+const UPLOAD_USERS     = ['All', 'Admin', 'Faculty'];
+
+function uploadStatusTone(s: string) {
+  if (s === 'Completed') return 'text-emerald-600';
+  if (s === 'Processing') return 'text-amber-600';
+  if (s === 'Failed')    return 'text-red-600';
+  return 'text-gray-400';
+}
+
+function CurriculumUploadStatusPage() {
+  const [uploadStatus,     setUploadStatus]     = useState('All');
+  const [transcodeStatus,  setTranscodeStatus]  = useState('All');
+  const [type,             setType]             = useState('All');
+  const [user,             setUser]             = useState('All');
+  const [search,           setSearch]           = useState('');
+  const [applied,          setApplied]          = useState<Record<string,string>>({});
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setApplied({ uploadStatus, transcodeStatus, type, user, search });
+  }
+
+  const rows = UPLOAD_SEED.filter(r => {
+    if (applied.uploadStatus    && applied.uploadStatus    !== 'All' && r.uploadStatus    !== applied.uploadStatus)    return false;
+    if (applied.transcodeStatus && applied.transcodeStatus !== 'All' && r.transcodeStatus !== applied.transcodeStatus) return false;
+    if (applied.type            && applied.type            !== 'All' && r.type            !== applied.type)            return false;
+    if (applied.user            && applied.user            !== 'All' && r.user            !== applied.user)            return false;
+    if (applied.search && !r.video.toLowerCase().includes(applied.search.toLowerCase())) return false;
+    return true;
+  });
+
+  const selClass = "rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40";
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+
+        {/* Back link */}
+        <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+          <ChevronLeft size={18} /> Content Upload/Transcode Status
+        </Link>
+
+        {/* Filter card */}
+        <form onSubmit={handleSubmit} className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-600">Upload Status</p>
+              <select value={uploadStatus} onChange={e => setUploadStatus(e.target.value)} className={selClass}>
+                {UPLOAD_STATUSES.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-600">Transcode Status</p>
+              <select value={transcodeStatus} onChange={e => setTranscodeStatus(e.target.value)} className={selClass}>
+                {TRANSCODE_STATUSES.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-600">Type</p>
+              <select value={type} onChange={e => setType(e.target.value)} className={selClass}>
+                {UPLOAD_TYPES.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-600">User</p>
+              <select value={user} onChange={e => setUser(e.target.value)} className={selClass}>
+                {UPLOAD_USERS.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="flex-1 min-w-[160px]">
+              <p className="mb-1.5 text-xs font-semibold text-gray-600 invisible">Search</p>
+              <div className="relative">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Type Here"
+                  className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40" />
+              </div>
+            </div>
+            <button type="submit"
+              className="rounded-lg bg-primary px-6 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shrink-0">
+              Submit
+            </button>
+          </div>
+        </form>
+
+        {/* Table */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-primary/15">
+                <th className="px-5 py-3.5 text-left text-xs font-bold text-primary">Video</th>
+                <th className="px-4 py-3.5 text-left text-xs font-bold text-primary">Created Date</th>
+                <th className="px-4 py-3.5 text-left text-xs font-bold text-primary">Updated Date</th>
+                <th className="px-4 py-3.5 text-left text-xs font-bold text-primary">Upload Status</th>
+                <th className="px-4 py-3.5 text-left text-xs font-bold text-primary">Transcode Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {rows.length === 0 && (
+                <tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">No records match your filters.</td></tr>
+              )}
+              {rows.map(r => (
+                <tr key={r.id} className="hover:bg-gray-50">
+                  <td className="px-5 py-3 text-gray-700">{r.video}</td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.createdDate}</td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.updatedDate}</td>
+                  <td className={cx('px-4 py-3 font-medium', uploadStatusTone(r.uploadStatus))}>{r.uploadStatus}</td>
+                  <td className={cx('px-4 py-3 font-medium', uploadStatusTone(r.transcodeStatus))}>{r.transcodeStatus}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─── CurriculumOthersPage (FAQ Categories) ────────────────────────────────────
+function CurriculumOthersPage() {
+  const [categories, setCategories] = useState<string[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName]       = useState('');
+
+  function handleCreate(e: FormEvent) {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    setCategories(c => [...c, newName.trim()]);
+    setNewName('');
+    setShowCreate(false);
+  }
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10">
+
+        {/* Back link + toolbar row */}
+        <div className="flex items-center justify-between mb-8">
+          <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+            <ChevronLeft size={18} /> FAQ Categories
+          </Link>
+          <button type="button" onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-gray-200 rounded-lg bg-white shadow-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+            <Scissors size={13} /> Create
+          </button>
+        </div>
+
+        {/* Content */}
+        {categories.length === 0 ? (
+          <div className="flex items-center justify-center" style={{ minHeight: '40vh' }}>
+            <p className="text-sm text-gray-500">No data to display</p>
+          </div>
+        ) : (
+          <div className="rounded-xl bg-white border border-gray-100 shadow-xs overflow-hidden">
+            <div className="grid grid-cols-[1fr_80px] border-b border-primary/15 px-5 py-3">
+              <span className="text-xs font-bold text-primary uppercase tracking-wide">Category Name</span>
+              <span className="text-xs font-bold text-primary uppercase tracking-wide text-right">Actions</span>
+            </div>
+            {categories.map((cat, i) => (
+              <div key={i} className={cx('grid grid-cols-[1fr_80px] items-center px-5 py-3', i < categories.length - 1 && 'border-b border-gray-100')}>
+                <span className="text-sm text-gray-700">{cat}</span>
+                <div className="flex items-center justify-end gap-2">
+                  <button type="button" title="Edit"   className="text-gray-400 hover:text-primary transition-colors"><Pencil size={15} /></button>
+                  <button type="button" title="Delete" onClick={() => setCategories(c => c.filter((_, j) => j !== i))} className="text-gray-400 hover:text-destructive transition-colors"><Trash2 size={15} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showCreate && (
+        <Modal title="Create FAQ Category" onClose={() => setShowCreate(false)}>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <Field label="Category name">
+              <input required autoFocus data-testid="input-faq-category"
+                value={newName} onChange={e => setNewName(e.target.value)}
+                placeholder="e.g. Course Enrollment" className="form-input" />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-faq" variant="quiet" onClick={() => setShowCreate(false)}>Cancel</Button>
+              <Button testId="button-submit-faq" type="submit">Create</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppRouter /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
 export default App;
