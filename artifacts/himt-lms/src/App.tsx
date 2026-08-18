@@ -2,39 +2,46 @@ import { type FormEvent, type ReactNode, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import {
-  Activity, ArrowRight, Award, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronDown,
+  Activity, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Download, FileUp, Filter, GraduationCap,
-  LayoutDashboard, LifeBuoy, LockKeyhole, Menu, MoreHorizontal, Plus, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal,
+  Layers, LayoutDashboard, LifeBuoy, LockKeyhole, Map, Menu, MoreHorizontal, Plus, RefreshCw,
+  Route as RouteIcon, Search, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, TrendingUp, Upload, Users, Video, X
 } from 'lucide-react';
 import {
   getGetAnalyticsOverviewQueryKey, getGetCourseQueryKey, getGetDashboardQueryKey,
-  getListAnnouncementsQueryKey, getListAssignmentsQueryKey, getListCertificatesQueryKey, getListCoursesQueryKey,
-  getListSessionsQueryKey, getListUsersQueryKey,
-  useCreateAssignment, useCreateCourse, useGetAnalyticsOverview, useGetCourse, useGetDashboard,
-  useImportUsers, useListAnnouncements, useListAssignments, useListCertificates, useListCourses,
-  useListSessions, useListUsers
+  getGetCurriculumCourseOutlineQueryKey, getListAnnouncementsQueryKey, getListAssignmentsQueryKey,
+  getListCertificatesQueryKey, getListCoursesQueryKey, getListProgrammeCoursesQueryKey,
+  getListProgrammesQueryKey, getListSessionsQueryKey, getListUsersQueryKey,
+  useAddCourseOutcome, useCreateAssignment, useCreateCourse, useGetAnalyticsOverview,
+  useGetCourse, useGetCurriculumCourseOutline, useGetDashboard, useImportUsers,
+  useListAnnouncements, useListAssignments, useListCertificates, useListCourses,
+  useListProgrammeCourses, useListProgrammes, useListSessions, useListUsers
 } from '@workspace/api-client-react';
 import type {
   Activity as ActivityType, AnalyticsOverview, Assignment, Certificate, Course, CourseDetail,
-  Dashboard, Session, Topic, User
+  CourseOutcome, CourseOutcomeInput, CurriculumCourse, Dashboard, Programme,
+  ProgrammeCourse, Session, Topic, User
 } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
+import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 const queryClient = new QueryClient();
 
 const navItems = [
   { href: '/', label: 'Overview', icon: LayoutDashboard },
+  { href: '/curriculum', label: 'Curriculum', icon: BookMarked },
   { href: '/courses', label: 'Courses', icon: BookOpen },
-  { href: '/assignments', label: 'Assignments', icon: ClipboardCheck },
-  { href: '/sessions', label: 'Sessions', icon: CalendarDays },
+  { href: '/assignments', label: 'Assessments', icon: ClipboardCheck },
+  { href: '/learning-path', label: 'Learning Path', icon: RouteIcon },
+  { href: '/analytics', label: 'Reports', icon: BarChart3 },
+  { href: '/sessions', label: 'Calendar', icon: CalendarDays },
   { href: '/certificates', label: 'Certificates', icon: Award },
 ];
 const adminItems = [
-  { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/users', label: 'Users & roles', icon: Users },
 ];
 
@@ -47,60 +54,58 @@ function niceDate(value: string | null | undefined) {
 function initials(name = 'HIMT') { return name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase(); }
 function statusTone(status = '') {
   const s = status.toLowerCase();
-  if (s.includes('complete') || s.includes('active') || s.includes('valid') || s.includes('published') || s.includes('present')) return 'bg-[hsl(var(--accent)/.15)] text-[hsl(166_43%_30%)]';
-  if (s.includes('pending') || s.includes('progress') || s.includes('upcoming') || s.includes('review')) return 'bg-[hsl(var(--accent)/.18)] text-[hsl(var(--primary))]';
-  if (s.includes('overdue') || s.includes('expired') || s.includes('failed')) return 'bg-[hsl(var(--destructive)/.12)] text-[hsl(var(--destructive))]';
-  return 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]';
+  if (s.includes('complete') || s.includes('active') || s.includes('valid') || s.includes('published') || s.includes('present')) return 'bg-[hsl(var(--primary)/.15)] text-primary';
+  if (s.includes('pending') || s.includes('progress') || s.includes('upcoming') || s.includes('review')) return 'bg-amber-100 text-amber-700';
+  if (s.includes('overdue') || s.includes('expired') || s.includes('failed')) return 'bg-destructive/10 text-destructive';
+  return 'bg-muted text-muted-foreground';
 }
 
 function Shell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const current = [...navItems, ...adminItems].find((item) => item.href === location);
+  const current = [...navItems, ...adminItems].find((item) => item.href === location) || navItems[0];
   return (
-    <div className="lms-grain min-h-[100dvh] bg-background text-foreground">
+    <div className="min-h-[100dvh] bg-background text-foreground">
       <aside className={cx('fixed inset-y-0 left-0 z-40 flex w-[254px] flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 lg:translate-x-0', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
-        <div className="flex h-[84px] items-center gap-3 border-b border-sidebar-border px-6">
-          <div className="grid h-10 w-10 place-items-center rounded-[13px] bg-sidebar-primary text-sidebar-primary-foreground">
-            <span className="font-display text-lg font-extrabold">H</span>
+        <div className="flex h-[72px] items-center gap-3 px-6 border-b border-sidebar-border/50">
+          <div className="grid h-8 w-8 place-items-center rounded bg-sidebar-primary text-sidebar-primary-foreground">
+            <span className="text-sm font-bold">H</span>
           </div>
           <div>
-            <div className="font-display text-[17px] font-extrabold tracking-tight">HIMT</div>
-            <div className="font-mono-ui text-[9px] uppercase tracking-[.19em] text-sidebar-foreground/60">Learning system</div>
+            <div className="text-[15px] font-bold tracking-tight text-white">HIMT</div>
           </div>
           <button data-testid="button-close-navigation" aria-label="Close navigation" onClick={() => setMobileOpen(false)} className="ml-auto rounded-lg p-1 text-sidebar-foreground/60 hover:bg-sidebar-accent lg:hidden"><X size={18} /></button>
         </div>
-        <div className="px-4 pt-7">
-          <p className="mb-3 px-3 font-mono-ui text-[10px] uppercase tracking-[.18em] text-sidebar-foreground/45">Workspace</p>
+        <div className="px-4 py-6 flex-1 overflow-y-auto">
           <nav className="space-y-1" aria-label="Main navigation">
             {navItems.map(({ href, label, icon: Icon }) => <NavItem key={href} href={href} label={label} icon={Icon} active={location === href} onNavigate={() => setMobileOpen(false)} />)}
           </nav>
-          <p className="mb-3 mt-8 px-3 font-mono-ui text-[10px] uppercase tracking-[.18em] text-sidebar-foreground/45">Operations</p>
+          <div className="mt-8 mb-3 h-px bg-sidebar-border" />
           <nav className="space-y-1" aria-label="Operations navigation">
             {adminItems.map(({ href, label, icon: Icon }) => <NavItem key={href} href={href} label={label} icon={Icon} active={location === href} onNavigate={() => setMobileOpen(false)} />)}
           </nav>
         </div>
-        <div className="mt-auto p-4">
-          <div className="rounded-2xl border border-sidebar-border bg-sidebar-accent/70 p-4">
-            <div className="mb-3 flex items-center gap-2 text-sidebar-primary"><ShieldCheck size={16} /><span className="font-mono-ui text-[10px] uppercase tracking-widest">Compliance ready</span></div>
-            <p className="text-xs leading-relaxed text-sidebar-foreground/65">Training records are synced and backed up for your next audit.</p>
-            <Link href="/certificates" data-testid="link-compliance-records" className="mt-3 flex items-center gap-1 text-xs font-bold text-sidebar-primary hover:gap-2">View records <ArrowRight size={13} /></Link>
+        <div className="mt-auto p-4 border-t border-sidebar-border">
+          <button data-testid="button-settings" className="mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-white"><Settings2 size={18} /> Settings</button>
+          <div className="flex items-center gap-3 rounded-xl px-2 py-2 mt-2">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sidebar-primary text-xs font-bold text-sidebar-primary-foreground">AM</span>
+            <div className="text-left flex-1 min-w-0">
+              <span className="block text-sm font-bold text-white truncate">Amina Malik</span>
+              <span className="block text-[11px] text-sidebar-foreground/60 truncate">Learner · HLT-2041</span>
+            </div>
           </div>
-          <button data-testid="button-settings" className="mt-3 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-foreground"><Settings2 size={16} /> Settings</button>
         </div>
       </aside>
       <div className="lg:pl-[254px]">
-        <header className="sticky top-0 z-30 flex h-[72px] items-center justify-between border-b border-border bg-background/90 px-5 backdrop-blur-md lg:px-10">
+        <header className="sticky top-0 z-30 flex h-[72px] items-center justify-between border-b border-border bg-card px-5 lg:px-10">
           <div className="flex items-center gap-3">
             <button data-testid="button-open-navigation" aria-label="Open navigation" onClick={() => setMobileOpen(true)} className="rounded-lg p-2 hover:bg-muted lg:hidden"><Menu size={20} /></button>
             <div className="hidden items-center gap-2 text-sm text-muted-foreground sm:flex"><span>HIMT</span><ChevronRight size={14} /><span className="font-semibold text-foreground">{current?.label ?? 'Workspace'}</span></div>
-            <span className="font-display text-lg font-bold sm:hidden">{current?.label ?? 'Workspace'}</span>
+            <span className="text-lg font-bold sm:hidden">{current?.label ?? 'Workspace'}</span>
           </div>
           <div className="flex items-center gap-2.5">
             <button data-testid="button-help" aria-label="Help centre" className="hidden rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground sm:block"><LifeBuoy size={18} /></button>
-            <button data-testid="button-notifications" aria-label="Notifications" className="relative rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground"><Bell size={18} /><span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" /></button>
-            <div className="ml-1 hidden h-7 w-px bg-border sm:block" />
-            <button data-testid="button-profile" className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 hover:bg-muted"><span className="grid h-8 w-8 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">AM</span><span className="hidden text-left sm:block"><span className="block text-xs font-bold">Amina Malik</span><span className="block font-mono-ui text-[9px] text-muted-foreground">Learner · HLT-2041</span></span><ChevronDown size={14} className="hidden text-muted-foreground sm:block" /></button>
+            <button data-testid="button-notifications" aria-label="Notifications" className="relative rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground"><Bell size={18} /><span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-destructive" /></button>
           </div>
         </header>
         <main className="mx-auto max-w-[1500px] px-5 py-7 lg:px-10 lg:py-9">{children}</main>
@@ -110,107 +115,604 @@ function Shell({ children }: { children: ReactNode }) {
 }
 
 function NavItem({ href, label, icon: Icon, active, onNavigate }: { href: string; label: string; icon: typeof LayoutDashboard; active: boolean; onNavigate: () => void }) {
-  return <Link href={href} onClick={onNavigate} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`} className={cx('group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold', active ? 'bg-sidebar-primary text-sidebar-primary-foreground' : 'text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-foreground')}><Icon size={17} strokeWidth={active ? 2.4 : 1.8} /><span>{label}</span>{active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-current opacity-70" />}</Link>;
+  return <Link href={href} onClick={onNavigate} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`} className={cx('group flex items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium', active ? 'bg-sidebar-primary text-sidebar-primary-foreground font-semibold' : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-white')}><Icon size={18} strokeWidth={active ? 2.5 : 2} /><span>{label}</span></Link>;
 }
 
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description?: string; action?: ReactNode }) {
-  return <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><p className="mb-2 font-mono-ui text-[10px] uppercase tracking-[.2em] text-primary">{eyebrow}</p><h1 className="font-display text-3xl font-extrabold tracking-[-.04em] text-foreground sm:text-4xl">{title}</h1>{description && <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">{description}</p>}</div>{action}</div>;
+  return <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-primary">{eyebrow}</p><h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">{title}</h1>{description && <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">{description}</p>}</div>{action}</div>;
 }
 
 function Skeleton({ className = '' }: { className?: string }) { return <div className={cx('animate-pulse rounded-xl bg-muted', className)} />; }
 function LoadingPanel() { return <div className="space-y-4"><Skeleton className="h-32 w-full" /><div className="grid gap-4 md:grid-cols-3"><Skeleton className="h-24" /><Skeleton className="h-24" /><Skeleton className="h-24" /></div><Skeleton className="h-72 w-full" /></div>; }
-function ErrorPanel({ onRetry, compact = false }: { onRetry: () => void; compact?: boolean }) { return <div className={cx('flex items-center justify-between rounded-2xl border border-[hsl(var(--destructive)/.25)] bg-[hsl(var(--destructive)/.06)] p-5', compact ? 'text-sm' : 'min-h-[180px]')}><div className="flex items-center gap-3"><CircleAlert className="text-destructive" size={20} /><div><p className="font-bold">{compact ? 'Could not load this list' : 'Something interrupted the view'}</p><p className="mt-1 text-xs text-muted-foreground">The records are safe. Try refreshing this panel.</p></div></div><button data-testid="button-retry" onClick={onRetry} className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-bold hover:bg-muted"><RefreshCw size={14} /> Retry</button></div>; }
-function EmptyPanel({ icon: Icon, title, description, action }: { icon: typeof BookOpen; title: string; description: string; action?: ReactNode }) { return <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/50 p-8 text-center"><span className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-muted text-primary"><Icon size={22} /></span><h3 className="font-display text-lg font-bold">{title}</h3><p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>{action}</div>; }
-function Pill({ children, tone }: { children: ReactNode; tone?: string }) { return <span className={cx('inline-flex items-center rounded-full px-2.5 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-wide', tone ?? statusTone(String(children)))}>{children}</span>; }
-function ProgressBar({ value, accent = 'bg-primary' }: { value: number; accent?: string }) { return <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className={cx('h-full rounded-full transition-all duration-500', accent)} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} /></div>; }
-function Button({ children, onClick, variant = 'primary', testId, type = 'button', disabled = false }: { children: ReactNode; onClick?: () => void; variant?: 'primary' | 'outline' | 'quiet'; testId: string; type?: 'button' | 'submit'; disabled?: boolean }) { return <button type={type} disabled={disabled} data-testid={testId} onClick={onClick} className={cx('inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50', variant === 'primary' && 'bg-primary text-primary-foreground shadow-sm hover:-translate-y-0.5 hover:bg-[hsl(var(--primary)/.9)]', variant === 'outline' && 'border border-border bg-card text-foreground hover:bg-muted', variant === 'quiet' && 'text-muted-foreground hover:bg-muted hover:text-foreground')}>{children}</button>; }
+function ErrorPanel({ onRetry, compact = false }: { onRetry: () => void; compact?: boolean }) { return <div className={cx('flex items-center justify-between rounded-xl border border-[hsl(var(--destructive)/.25)] bg-[hsl(var(--destructive)/.06)] p-5', compact ? 'text-sm' : 'min-h-[180px]')}><div className="flex items-center gap-3"><CircleAlert className="text-destructive" size={20} /><div><p className="font-bold">{compact ? 'Could not load this list' : 'Something interrupted the view'}</p><p className="mt-1 text-xs text-muted-foreground">The records are safe. Try refreshing this panel.</p></div></div><button data-testid="button-retry" onClick={onRetry} className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-bold hover:bg-muted"><RefreshCw size={14} /> Retry</button></div>; }
+function EmptyPanel({ icon: Icon, title, description, action }: { icon: typeof BookOpen; title: string; description: string; action?: ReactNode }) { return <div className="flex min-h-[220px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-muted/30 p-8 text-center"><span className="mb-4 grid h-12 w-12 place-items-center rounded-xl bg-background text-primary shadow-sm border border-border"><Icon size={22} /></span><h3 className="text-lg font-bold">{title}</h3><p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>{action}</div>; }
+function Pill({ children, tone }: { children: ReactNode; tone?: string }) { return <span className={cx('inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider', tone ?? statusTone(String(children)))}>{children}</span>; }
+function ProgressBar({ value, accent = 'bg-primary' }: { value: number; accent?: string }) { return <div className="h-2 overflow-hidden rounded-full bg-muted"><div className={cx('h-full rounded-full transition-all duration-500', accent)} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} /></div>; }
+function Button({ children, onClick, variant = 'primary', testId, type = 'button', disabled = false }: { children: ReactNode; onClick?: () => void; variant?: 'primary' | 'outline' | 'quiet'; testId: string; type?: 'button' | 'submit'; disabled?: boolean }) { return <button type={type} disabled={disabled} data-testid={testId} onClick={onClick} className={cx('inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50', variant === 'primary' && 'bg-primary text-primary-foreground shadow-sm hover:-translate-y-0.5 hover:bg-[hsl(var(--primary)/.9)]', variant === 'outline' && 'border border-border bg-card text-foreground hover:bg-muted shadow-sm', variant === 'quiet' && 'text-muted-foreground hover:bg-muted hover:text-foreground')}>{children}</button>; }
 
 function DashboardPage() {
   const [, setLocation] = useLocation();
   const query = useGetDashboard({ query: { queryKey: getGetDashboardQueryKey() } });
-  const announcementsQuery = useListAnnouncements({ query: { queryKey: getListAnnouncementsQueryKey() } });
+  const analyticsQuery = useGetAnalyticsOverview({ query: { queryKey: getGetAnalyticsOverviewQueryKey() } });
   const dashboard = query.data as Dashboard | undefined;
+  const analytics = analyticsQuery.data as AnalyticsOverview | undefined;
+
   if (query.isLoading) return <><PageHeading eyebrow="Monday, 16 September 2024" title="Good morning, Amina." description="Your learning route is clear. Here is what deserves your attention today." /><LoadingPanel /></>;
   if (query.isError || !dashboard) return <><PageHeading eyebrow="Learner overview" title="Good morning, Amina." /><ErrorPanel onRetry={() => query.refetch()} /></>;
   const learner = dashboard.learner;
-  const announcements = (announcementsQuery.data as Dashboard['announcements'] | undefined) ?? dashboard.announcements;
   const activeCourses = dashboard.courses.filter((course) => course.status.toLowerCase().includes('active') || course.progress > 0).slice(0, 3);
-  return <div className="space-y-8">
-    <PageHeading eyebrow="Monday, 16 September 2024" title={`Good morning, ${learner.name.split(' ')[0]}.`} description="Your learning route is clear. Here is what deserves your attention today." action={<Button testId="button-browse-courses" onClick={() => setLocation('/courses')} variant="outline"><BookOpen size={16} /> Browse catalogue</Button>} />
-    <section className="dashboard-grid relative overflow-hidden rounded-[24px] border border-border bg-card p-6 shadow-sm sm:p-8">
-      <div className="absolute -right-20 -top-28 h-72 w-72 rounded-full border-[30px] border-[hsl(var(--accent)/.18)]" /><div className="relative max-w-2xl"><div className="mb-5 flex items-center gap-2 text-primary"><Sparkles size={16} /><span className="font-mono-ui text-[10px] font-bold uppercase tracking-[.18em]">Your learning pulse</span></div><div className="flex flex-col gap-7 sm:flex-row sm:items-end"><div><p className="font-display text-5xl font-extrabold tracking-[-.07em] text-foreground">{learner.averageProgress}<span className="text-2xl text-primary">%</span></p><p className="mt-1 text-sm text-muted-foreground">average progress across {learner.activeCourses} active courses</p></div><div className="max-w-xs flex-1 pb-1"><ProgressBar value={learner.averageProgress} accent="bg-[hsl(var(--accent))]" /><div className="mt-2 flex justify-between font-mono-ui text-[10px] uppercase text-muted-foreground"><span>On course</span><span>{learner.streak} day streak</span></div></div></div></div>
-    </section>
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <MetricCard label="Active courses" value={learner.activeCourses} hint="In your route" icon={BookOpen} />
-      <MetricCard label="Pending tasks" value={learner.pendingTasks} hint="Need your attention" icon={ClipboardCheck} tone="gold" />
-      <MetricCard label="Attendance" value={`${learner.attendance}%`} hint="Across live sessions" icon={CalendarDays} tone="teal" />
-      <MetricCard label="Completed" value={learner.completedCourses} hint="Courses finished" icon={Award} tone="violet" />
+  
+  const pieData = [
+    { name: 'Completed', value: learner.averageProgress, color: 'hsl(var(--primary))' },
+    { name: 'Remaining', value: 100 - learner.averageProgress, color: 'hsl(var(--muted))' }
+  ];
+
+  return <div className="space-y-6">
+    <PageHeading eyebrow={`Learner ID: ${learner.learnerId}`} title={`Welcome back, ${learner.name.split(' ')[0]}.`} description="Here's how your learning journey is progressing." action={<Button testId="button-browse-courses" onClick={() => setLocation('/courses')} variant="outline"><BookOpen size={16} /> Browse catalogue</Button>} />
+    
+    <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+      <MetricCard label="Overall Progress" value={`${learner.averageProgress}%`} hint="On track" icon={TrendingUp} />
+      <MetricCard label="Courses Enrolled" value={dashboard.courses.length} hint="Total courses" icon={BookOpen} />
+      <MetricCard label="Assessments" value={dashboard.assignments.length} hint="Pending tasks" icon={ClipboardCheck} />
+      <MetricCard label="Concept Mastery" value={`${learner.averageProgress}%`} hint="Avg. progress" icon={Activity} />
+      <MetricCard label="Study Streak" value={`${learner.streak} days`} hint="Keep going" icon={Award} />
     </div>
-    <div className="grid gap-7 xl:grid-cols-[1.45fr_1fr]">
-      <section className="rounded-2xl border border-border bg-card p-5 sm:p-6"><SectionTitle title="Continue learning" meta={`${activeCourses.length} in progress`} link="/courses" />{activeCourses.length ? <div className="mt-6 space-y-3">{activeCourses.map((course, index) => <CourseRow key={course.id} course={course} index={index} />)}</div> : <EmptyPanel icon={BookOpen} title="Your route is open" description="Pick a course from the catalogue to start building your learning route." action={<Link href="/courses" data-testid="link-empty-course-catalogue" className="mt-4 text-sm font-bold text-primary">Explore catalogue <ArrowRight size={14} className="ml-1 inline" /></Link>} />}</section>
-      <section className="rounded-2xl border border-border bg-card p-5 sm:p-6"><SectionTitle title="Next up" meta="This week" link="/sessions" />{dashboard.sessions.length ? <div className="mt-5 space-y-1">{dashboard.sessions.slice(0, 3).map((session) => <SessionRow key={session.id} session={session} />)}</div> : <EmptyPanel icon={CalendarDays} title="A quiet week" description="There are no upcoming classroom or webinar sessions." />}</section>
+
+    <div className="grid gap-6 lg:grid-cols-3">
+      <div className="lg:col-span-2 space-y-6">
+        <section className="rounded-xl border border-border bg-card p-5 sm:p-6 shadow-xs">
+          <h2 className="text-lg font-bold">Course overview</h2>
+          <div className="mt-6 flex flex-col md:flex-row gap-8 items-center">
+            <div className="w-44 h-44 shrink-0 relative">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={pieData} innerRadius={60} outerRadius={80} paddingAngle={0} dataKey="value" stroke="none">
+                    {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-3xl font-bold">{learner.averageProgress}%</span>
+              </div>
+            </div>
+            <div className="flex-1 w-full space-y-5">
+              {activeCourses.length ? activeCourses.map(course => (
+                <div key={course.id}>
+                  <div className="flex justify-between text-sm mb-1.5">
+                    <span className="font-semibold">{course.name}</span>
+                    <span className="font-semibold text-muted-foreground">{course.progress}%</span>
+                  </div>
+                  <ProgressBar value={course.progress} />
+                </div>
+              )) : <p className="text-sm text-muted-foreground">No active courses. Browse the catalogue to begin.</p>}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-5 sm:p-6 shadow-xs">
+          <SectionTitle title="Upcoming tasks" meta={`${dashboard.assignments.length} total`} link="/assignments" />
+          {dashboard.assignments.length ? <div className="mt-5 divide-y divide-border">{dashboard.assignments.slice(0, 4).map((assignment) => <AssignmentRow key={assignment.id} assignment={assignment} />)}</div> : <EmptyPanel icon={ClipboardCheck} title="No open tasks" description="When faculty assign work, it will appear here." />}
+        </section>
+      </div>
+
+      <div className="space-y-6">
+        <section className="rounded-xl border border-[hsl(var(--primary)/.2)] bg-[hsl(var(--primary)/.05)] p-5 sm:p-6 shadow-xs">
+          <div className="flex items-center gap-2 text-primary mb-3">
+            <Sparkles size={18} />
+            <h2 className="text-lg font-bold">Learning Insights</h2>
+          </div>
+          <p className="text-sm leading-relaxed text-foreground/80">
+            Keep attending live sessions — your attendance drives completion. You are on a {learner.streak} day streak, maintaining your momentum this week will put you ahead of your cohort.
+          </p>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-5 sm:p-6 shadow-xs">
+          <h2 className="text-lg font-bold mb-6">Progress by assessment</h2>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={analytics?.weeklyActivity || []}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))', fontWeight: 500 }} dy={10} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))', fontWeight: 500 }} />
+                <Tooltip cursor={{ fill: 'hsl(var(--muted))' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                <Bar dataKey="value" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} maxBarSize={32} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      </div>
     </div>
-    <div className="grid gap-7 xl:grid-cols-[1fr_1fr]">
-      <section className="rounded-2xl border border-border bg-card p-5 sm:p-6"><SectionTitle title="Tasks to close" meta={`${dashboard.assignments.length} total`} link="/assignments" />{dashboard.assignments.length ? <div className="mt-5 divide-y divide-border">{dashboard.assignments.slice(0, 4).map((assignment) => <AssignmentRow key={assignment.id} assignment={assignment} />)}</div> : <EmptyPanel icon={ClipboardCheck} title="No open tasks" description="When faculty assign work, it will appear here." />}</section>
-      <section className="rounded-2xl border border-border bg-card p-5 sm:p-6"><SectionTitle title="Latest from HIMT" meta="Announcements" />{announcements.length ? <div className="mt-4 space-y-1">{announcements.slice(0, 3).map((item) => <AnnouncementRow key={item.id} announcement={item} />)}</div> : <EmptyPanel icon={Bell} title="You're up to date" description="New programme notices and news will appear here." />}</section>
-    </div>
-    <CertificateStrip certificates={dashboard.certificates} />
   </div>;
 }
 
-function MetricCard({ label, value, hint, icon: Icon, tone = 'navy' }: { label: string; value: ReactNode; hint: string; icon: typeof BookOpen; tone?: string }) { const tones: Record<string, string> = { navy: 'bg-[hsl(var(--primary)/.1)] text-primary', gold: 'bg-[hsl(var(--accent)/.2)] text-[hsl(34_70%_40%)]', teal: 'bg-[hsl(166_43%_39%/.13)] text-[hsl(166_43%_30%)]', violet: 'bg-[hsl(273_28%_53%/.14)] text-[hsl(273_28%_45%)]' }; return <div className="rounded-2xl border border-border bg-card p-5"><div className="flex items-start justify-between"><div><p className="text-xs font-semibold text-muted-foreground">{label}</p><p data-testid={`metric-${label.toLowerCase().replaceAll(' ', '-')}`} className="mt-2 font-display text-3xl font-extrabold tracking-tight">{value}</p></div><span className={cx('grid h-9 w-9 place-items-center rounded-xl', tones[tone])}><Icon size={17} /></span></div><p className="mt-4 font-mono-ui text-[10px] uppercase tracking-wide text-muted-foreground">{hint}</p></div>; }
-function SectionTitle({ title, meta, link }: { title: string; meta: string; link?: string }) { return <div className="flex items-center justify-between"><div><h2 className="font-display text-xl font-bold tracking-tight">{title}</h2><p className="mt-1 font-mono-ui text-[10px] uppercase tracking-widest text-muted-foreground">{meta}</p></div>{link && <Link href={link} data-testid={`link-view-${title.toLowerCase().replaceAll(' ', '-')}`} className="text-xs font-bold text-primary hover:underline">View all <ArrowRight size={13} className="ml-1 inline" /></Link>}</div>; }
-function CourseRow({ course, index }: { course: Course; index: number }) { return <Link href={`/courses/${course.id}`} data-testid={`link-course-${course.id}`} className="group flex items-center gap-4 rounded-xl border border-transparent p-2 transition hover:border-border hover:bg-muted"><span className={cx('hidden h-12 w-12 shrink-0 place-items-center rounded-xl font-display text-lg font-bold sm:grid', index === 0 ? 'bg-primary text-primary-foreground' : 'bg-[hsl(var(--accent)/.2)] text-primary')}>{course.code.slice(0, 2)}</span><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-3"><h3 className="truncate text-sm font-bold">{course.name}</h3><span className="shrink-0 font-mono-ui text-[10px] text-muted-foreground">{course.progress}%</span></div><p className="mt-1 truncate text-xs text-muted-foreground">{course.code} · {course.nextActivity ?? 'Continue course'}</p><div className="mt-3"><ProgressBar value={course.progress} accent={index === 0 ? 'bg-primary' : 'bg-[hsl(var(--accent))]'} /></div></div><ChevronRight size={16} className="text-muted-foreground transition group-hover:translate-x-1" /></Link>; }
-function SessionRow({ session }: { session: Session }) { return <div data-testid={`session-row-${session.id}`} className="flex gap-3 rounded-xl p-3 hover:bg-muted"><div className="min-w-[42px] border-r border-border pr-3 text-center"><p className="font-mono-ui text-[10px] uppercase text-primary">{session.date.slice(0, 3)}</p><p className="font-display text-xl font-bold">{session.date.match(/\d+/)?.[0] ?? '--'}</p></div><div className="min-w-0"><h3 className="truncate text-sm font-bold">{session.title}</h3><p className="mt-1 truncate text-xs text-muted-foreground">{session.time} · {session.location}</p><Pill tone={statusTone(session.attendance)}>{session.attendance}</Pill></div></div>; }
-function AssignmentRow({ assignment }: { assignment: Assignment }) { return <div data-testid={`assignment-row-${assignment.id}`} className="flex items-center gap-3 py-3"><span className={cx('h-2 w-2 rounded-full', assignment.priority.toLowerCase().includes('high') ? 'bg-destructive' : 'bg-[hsl(var(--accent))]')} /><div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{assignment.title}</p><p className="mt-1 truncate text-xs text-muted-foreground">{assignment.course} · Due {niceDate(assignment.dueDate)}</p></div><Pill>{assignment.status}</Pill></div>; }
-function AnnouncementRow({ announcement }: { announcement: { id: string; title: string; body: string; publishedAt: string; unread: boolean } }) { return <div data-testid={`announcement-row-${announcement.id}`} className="flex gap-3 rounded-xl p-3 hover:bg-muted"><span className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', announcement.unread ? 'bg-[hsl(var(--accent))]' : 'bg-border')} /><div><p className="text-sm font-bold">{announcement.title}</p><p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{announcement.body}</p><p className="mt-2 font-mono-ui text-[9px] uppercase text-muted-foreground">{niceDate(announcement.publishedAt)}</p></div></div>; }
-function CertificateStrip({ certificates }: { certificates: Certificate[] }) { return <section className="rounded-2xl border border-border bg-[hsl(var(--primary))] p-5 text-primary-foreground sm:p-6"><div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center"><div className="flex items-center gap-4"><span className="grid h-11 w-11 place-items-center rounded-xl bg-primary-foreground/10"><Award size={22} /></span><div><h2 className="font-display text-xl font-bold">Your credential shelf</h2><p className="mt-1 text-sm text-primary-foreground/65">{certificates.length ? `${certificates.length} records ready to reference` : 'Your issued certificates will live here.'}</p></div></div><Link href="/certificates" data-testid="link-view-certificates" className="flex items-center gap-2 self-start rounded-xl bg-primary-foreground/10 px-4 py-2.5 text-sm font-bold hover:bg-primary-foreground/20 sm:self-auto">Open certificates <ArrowRight size={15} /></Link></div></section>; }
+function MetricCard({ label, value, hint, icon: Icon }: { label: string; value: ReactNode; hint: string; icon: typeof BookOpen; }) { 
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 shadow-xs flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <p data-testid={`metric-${label.toLowerCase().replaceAll(' ', '-')}`} className="text-2xl font-bold truncate">{value}</p>
+        <p className="text-xs font-semibold text-muted-foreground mt-0.5 truncate">{label}</p>
+        <p className="text-[10px] font-semibold text-primary mt-1 uppercase tracking-wide truncate">{hint}</p>
+      </div>
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+        <Icon size={20} />
+      </div>
+    </div>
+  ); 
+}
+function SectionTitle({ title, meta, link }: { title: string; meta: string; link?: string }) { return <div className="flex items-center justify-between"><div><h2 className="text-lg font-bold tracking-tight">{title}</h2><p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{meta}</p></div>{link && <Link href={link} data-testid={`link-view-${title.toLowerCase().replaceAll(' ', '-')}`} className="text-xs font-bold text-primary hover:underline">View all <ArrowRight size={13} className="ml-1 inline" /></Link>}</div>; }
+function AssignmentRow({ assignment }: { assignment: Assignment }) {
+  const isHigh = assignment.priority.toLowerCase().includes('high');
+  const isMed = assignment.priority.toLowerCase().includes('medium');
+  return <div data-testid={`assignment-row-${assignment.id}`} className="flex items-center gap-3 py-3"><span className={cx('h-2 w-2 shrink-0 rounded-full', isHigh ? 'bg-destructive' : isMed ? 'bg-amber-500' : 'bg-primary')} /><div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{assignment.title}</p><p className="mt-0.5 truncate text-xs text-muted-foreground">{assignment.course} · Due {niceDate(assignment.dueDate)}</p></div><Pill>{assignment.status}</Pill></div>; 
+}
 
 function CoursesPage() {
   const [search, setSearch] = useState(''); const [status, setStatus] = useState(''); const [open, setOpen] = useState(false);
   const query = useListCourses({ search: search || undefined, status: status || undefined }, { query: { queryKey: getListCoursesQueryKey({ search: search || undefined, status: status || undefined }) } });
   const courses = (query.data as Course[] | undefined) ?? [];
   return <div><PageHeading eyebrow="Learning catalogue" title="Courses" description="Explore the training route, check progress and keep every competency moving." action={<Button testId="button-create-course" onClick={() => setOpen(true)}><Plus size={16} /> Create course</Button>} />
-    <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 sm:flex-row"><label className="relative flex flex-1 items-center"><Search size={17} className="absolute left-3 text-muted-foreground" /><input data-testid="input-search-courses" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by course, code or category" className="h-11 w-full rounded-xl bg-muted/60 pl-10 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/30" /></label><label className="flex items-center gap-2 rounded-xl bg-muted/60 px-3"><Filter size={15} className="text-muted-foreground" /><select data-testid="select-course-status" value={status} onChange={(e) => setStatus(e.target.value)} className="h-11 bg-transparent text-sm font-semibold outline-none"><option value="">All statuses</option><option value="active">Active</option><option value="upcoming">Upcoming</option><option value="completed">Completed</option></select></label><Button testId="button-course-filters" variant="quiet" onClick={() => { setSearch(''); setStatus(''); }}><SlidersHorizontal size={16} /> Clear</Button></div>
+    <div className="mb-6 flex flex-col gap-3 rounded-xl border border-border bg-card p-3 shadow-xs sm:flex-row"><label className="relative flex flex-1 items-center"><Search size={17} className="absolute left-3 text-muted-foreground" /><input data-testid="input-search-courses" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by course, code or category" className="h-11 w-full rounded-lg bg-muted/60 pl-10 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/30" /></label><label className="flex items-center gap-2 rounded-lg bg-muted/60 px-3"><Filter size={15} className="text-muted-foreground" /><select data-testid="select-course-status" value={status} onChange={(e) => setStatus(e.target.value)} className="h-11 bg-transparent text-sm font-semibold outline-none"><option value="">All statuses</option><option value="active">Active</option><option value="upcoming">Upcoming</option><option value="completed">Completed</option></select></label><Button testId="button-course-filters" variant="quiet" onClick={() => { setSearch(''); setStatus(''); }}><SlidersHorizontal size={16} /> Clear</Button></div>
     {query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : courses.length === 0 ? <EmptyPanel icon={BookOpen} title="No courses match that search" description="Try a broader term or clear the filters to see the full catalogue." action={<Button testId="button-clear-course-search" variant="outline" onClick={() => { setSearch(''); setStatus(''); }}>Clear search</Button>} /> : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{courses.map((course, index) => <CourseCard key={course.id} course={course} index={index} />)}</div>}
     {open && <CourseForm onClose={() => setOpen(false)} />}
   </div>;
 }
-function CourseCard({ course, index }: { course: Course; index: number }) { const shades = ['bg-primary', 'bg-[hsl(166_43%_39%)]', 'bg-[hsl(273_28%_53%)]', 'bg-[hsl(34_70%_42%)]']; return <Link href={`/courses/${course.id}`} data-testid={`card-course-${course.id}`} className="group overflow-hidden rounded-2xl border border-border bg-card hover:-translate-y-1 hover:shadow-lg"><div className={cx('relative flex h-32 items-end overflow-hidden p-5 text-primary-foreground', shades[index % shades.length])}><div className="absolute -right-5 -top-8 h-36 w-36 rounded-full border-[18px] border-primary-foreground/10" /><div className="relative"><span className="font-mono-ui text-[10px] tracking-[.16em] opacity-70">{course.code}</span><h3 className="mt-1 max-w-[250px] font-display text-xl font-bold leading-tight">{course.name}</h3></div></div><div className="p-5"><div className="flex items-center justify-between"><Pill>{course.status}</Pill><span className="font-mono-ui text-[10px] text-muted-foreground">{course.duration}</span></div><div className="mt-6 flex items-end justify-between"><div className="flex-1"><div className="mb-2 flex justify-between text-xs"><span className="font-semibold text-muted-foreground">Your progress</span><span className="font-mono-ui font-bold">{course.progress}%</span></div><ProgressBar value={course.progress} /></div><ChevronRight className="ml-4 text-muted-foreground transition group-hover:translate-x-1" size={18} /></div><p className="mt-4 text-xs text-muted-foreground">{course.learners} enrolled · {course.language}</p></div></Link>; }
+function CourseCard({ course, index }: { course: Course; index: number }) { const shades = ['bg-primary', 'bg-[hsl(168_91%_25%)]', 'bg-[hsl(168_91%_20%)]', 'bg-[hsl(168_91%_35%)]']; return <Link href={`/courses/${course.id}`} data-testid={`card-course-${course.id}`} className="group overflow-hidden rounded-xl border border-border bg-card shadow-xs hover:-translate-y-1 hover:shadow-md transition-all"><div className={cx('relative flex h-32 items-end overflow-hidden p-5 text-primary-foreground', shades[index % shades.length])}><div className="absolute -right-5 -top-8 h-36 w-36 rounded-full border-[18px] border-white/10" /><div className="relative"><span className="text-[10px] font-semibold uppercase tracking-wider opacity-80">{course.code}</span><h3 className="mt-1 max-w-[250px] text-xl font-bold leading-tight">{course.name}</h3></div></div><div className="p-5"><div className="flex items-center justify-between"><Pill>{course.status}</Pill><span className="text-[11px] font-semibold text-muted-foreground">{course.duration}</span></div><div className="mt-6 flex items-end justify-between"><div className="flex-1"><div className="mb-2 flex justify-between text-xs"><span className="font-semibold text-muted-foreground">Your progress</span><span className="font-bold">{course.progress}%</span></div><ProgressBar value={course.progress} /></div><ChevronRight className="ml-4 text-muted-foreground transition group-hover:translate-x-1" size={18} /></div><p className="mt-4 text-[11px] font-medium text-muted-foreground">{course.learners} enrolled · {course.language}</p></div></Link>; }
 function CourseForm({ onClose }: { onClose: () => void }) { const create = useCreateCourse(); const [form, setForm] = useState({ name: '', code: '', category: 'Maritime operations', language: 'English', duration: '6 weeks' }); const submit = (e: FormEvent) => { e.preventDefault(); create.mutate({ data: form }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCoursesQueryKey() }); onClose(); } }); }; return <Modal title="Create a course" onClose={onClose}><form onSubmit={submit} className="space-y-4"><Field label="Course name"><input required data-testid="input-course-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Bridge resource management" className="form-input" /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Course code"><input required data-testid="input-course-code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="BRM-204" className="form-input" /></Field><Field label="Duration"><input required data-testid="input-course-duration" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} className="form-input" /></Field></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Category"><input data-testid="input-course-category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="form-input" /></Field><Field label="Language"><input data-testid="input-course-language" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} className="form-input" /></Field></div><div className="flex justify-end gap-2 pt-3"><Button testId="button-cancel-course" variant="quiet" onClick={onClose}>Cancel</Button><Button testId="button-submit-course" type="submit" disabled={create.isPending}>{create.isPending ? 'Creating…' : 'Create course'}</Button></div></form></Modal>; }
 
 function CourseDetailPage() {
   const { courseId = '' } = useParams<{ courseId: string }>(); const query = useGetCourse(courseId, { query: { queryKey: getGetCourseQueryKey(courseId), enabled: Boolean(courseId) } }); const course = query.data as CourseDetail | undefined; const [expanded, setExpanded] = useState<string | null>(null);
   if (query.isLoading) return <LoadingPanel />; if (query.isError || !course) return <ErrorPanel onRetry={() => query.refetch()} />;
-  return <div><Link href="/courses" data-testid="link-back-courses" className="mb-7 inline-flex items-center gap-2 text-xs font-bold text-muted-foreground hover:text-foreground"><ChevronLeft size={15} /> All courses</Link><div className="mb-8 overflow-hidden rounded-[24px] bg-primary text-primary-foreground"><div className="relative p-6 sm:p-10"><div className="absolute right-0 top-0 h-full w-2/5 overflow-hidden opacity-20"><div className="absolute -right-16 -top-16 h-80 w-80 rounded-full border-[34px] border-accent" /><div className="absolute right-24 top-20 h-40 w-40 rounded-full border-[20px] border-accent" /></div><div className="relative max-w-2xl"><span className="font-mono-ui text-[10px] uppercase tracking-[.2em] text-accent">{course.code} · {course.category}</span><h1 className="mt-3 font-display text-3xl font-extrabold tracking-[-.04em] sm:text-5xl">{course.name}</h1><p className="mt-4 max-w-xl text-sm leading-relaxed text-primary-foreground/70">{course.description}</p><div className="mt-7 flex flex-wrap items-center gap-4"><Button testId="button-resume-course" variant="outline" onClick={() => setExpanded(course.topics[0]?.id ?? null)}><Activity size={16} /> Resume course</Button><span className="font-mono-ui text-[10px] uppercase tracking-wide text-primary-foreground/60">{course.progress}% complete · {course.duration}</span></div></div></div></div>
-    <div className="grid gap-7 xl:grid-cols-[1fr_360px]"><section className="rounded-2xl border border-border bg-card p-5 sm:p-7"><div className="flex items-end justify-between"><div><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-primary">Course route</p><h2 className="mt-2 font-display text-2xl font-bold">Structure & activities</h2></div><span className="font-mono-ui text-xs text-muted-foreground">{course.topics.length} topics</span></div><div className="mt-7 space-y-3">{course.topics.map((topic, index) => <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} />)}</div></section><aside className="space-y-5"><section className="rounded-2xl border border-border bg-card p-6"><p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-primary">At a glance</p><div className="mt-5 space-y-5"><div><div className="flex justify-between text-sm"><span className="text-muted-foreground">Progress</span><b>{course.progress}%</b></div><div className="mt-2"><ProgressBar value={course.progress} /></div></div><InfoLine label="Language" value={course.language} /><InfoLine label="Learners" value={String(course.learners)} /><InfoLine label="Status" value={course.status} /></div></section><section className="rounded-2xl border border-border bg-[hsl(var(--accent)/.16)] p-6"><div className="flex gap-3"><GraduationCap size={18} className="shrink-0 text-primary" /><div><h3 className="font-bold">What you will be able to do</h3><ul className="mt-3 space-y-2 text-sm leading-relaxed text-muted-foreground">{course.objectives.map((objective) => <li key={objective} className="flex gap-2"><Check size={14} className="mt-1 shrink-0 text-primary" />{objective}</li>)}</ul></div></div></section></aside></div>
+  return <div><Link href="/courses" data-testid="link-back-courses" className="mb-7 inline-flex items-center gap-2 text-xs font-bold text-muted-foreground hover:text-foreground"><ChevronLeft size={15} /> All courses</Link><div className="mb-8 overflow-hidden rounded-xl bg-primary text-primary-foreground shadow-xs"><div className="relative p-6 sm:p-10"><div className="absolute right-0 top-0 h-full w-2/5 overflow-hidden opacity-20"><div className="absolute -right-16 -top-16 h-80 w-80 rounded-full border-[34px] border-white/20" /><div className="absolute right-24 top-20 h-40 w-40 rounded-full border-[20px] border-white/20" /></div><div className="relative max-w-2xl"><span className="text-[10px] font-semibold uppercase tracking-wider text-primary-foreground/80">{course.code} · {course.category}</span><h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">{course.name}</h1><p className="mt-4 max-w-xl text-sm leading-relaxed text-primary-foreground/90">{course.description}</p><div className="mt-7 flex flex-wrap items-center gap-4"><Button testId="button-resume-course" variant="outline" onClick={() => setExpanded(course.topics[0]?.id ?? null)}><Activity size={16} /> Resume course</Button><span className="text-[11px] font-semibold uppercase tracking-wider text-primary-foreground/80">{course.progress}% complete · {course.duration}</span></div></div></div></div>
+    <div className="grid gap-7 xl:grid-cols-[1fr_360px]"><section className="rounded-xl border border-border bg-card shadow-xs p-5 sm:p-7"><div className="flex items-end justify-between"><div><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Course route</p><h2 className="mt-1 text-xl font-bold">Structure & activities</h2></div><span className="text-xs font-semibold text-muted-foreground">{course.topics.length} topics</span></div><div className="mt-7 space-y-3">{course.topics.map((topic, index) => <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} />)}</div></section><aside className="space-y-5"><section className="rounded-xl border border-border bg-card shadow-xs p-6"><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">At a glance</p><div className="mt-5 space-y-5"><div><div className="flex justify-between text-sm"><span className="text-muted-foreground">Progress</span><b>{course.progress}%</b></div><div className="mt-2"><ProgressBar value={course.progress} /></div></div><InfoLine label="Language" value={course.language} /><InfoLine label="Learners" value={String(course.learners)} /><InfoLine label="Status" value={course.status} /></div></section><section className="rounded-xl border border-border bg-muted/40 p-6"><div className="flex gap-3"><GraduationCap size={18} className="shrink-0 text-primary" /><div><h3 className="font-bold text-sm">What you will be able to do</h3><ul className="mt-3 space-y-2 text-sm leading-relaxed text-muted-foreground">{course.objectives.map((objective) => <li key={objective} className="flex gap-2"><Check size={14} className="mt-1 shrink-0 text-primary" />{objective}</li>)}</ul></div></div></section></aside></div>
   </div>;
 }
-function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) { return <div className={cx('overflow-hidden rounded-xl border border-border', topic.locked && 'opacity-60')}><button data-testid={`button-topic-${topic.id}`} onClick={onToggle} className="flex w-full items-center gap-4 p-4 text-left hover:bg-muted"><span className="font-mono-ui text-xs text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-sm font-bold">{topic.title}</h3>{topic.locked && <LockKeyhole size={13} className="text-muted-foreground" />}</div><div className="mt-2 flex items-center gap-3"><ProgressBar value={topic.progress} accent="bg-[hsl(var(--accent))]" /><span className="font-mono-ui text-[10px] text-muted-foreground">{topic.progress}%</span></div></div><span className="hidden font-mono-ui text-[10px] text-muted-foreground sm:block">{topic.duration}</span><ChevronDown size={16} className={cx('text-muted-foreground', open && 'rotate-180')} /></button>{open && <div className="border-t border-border bg-muted/30 p-2">{topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>}</div>; }
-function ActivityRow({ activity }: { activity: ActivityType }) { return <button data-testid={`button-activity-${activity.id}`} className="flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-card"><span className={cx('grid h-7 w-7 place-items-center rounded-lg', activity.status.toLowerCase().includes('complete') ? 'bg-[hsl(var(--accent)/.2)] text-[hsl(166_43%_30%)]' : 'bg-card text-primary')}>{activity.status.toLowerCase().includes('complete') ? <Check size={14} /> : activity.protected ? <LockKeyhole size={13} /> : <PlayIcon />}</span><span className="min-w-0 flex-1 truncate text-xs font-semibold">{activity.title}</span><span className="font-mono-ui text-[10px] text-muted-foreground">{activity.duration}</span></button>; }
+function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) { return <div className={cx('overflow-hidden rounded-xl border border-border', topic.locked && 'opacity-60')}><button data-testid={`button-topic-${topic.id}`} onClick={onToggle} className="flex w-full items-center gap-4 p-4 text-left hover:bg-muted"><span className="text-xs font-semibold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-sm font-bold">{topic.title}</h3>{topic.locked && <LockKeyhole size={13} className="text-muted-foreground" />}</div><div className="mt-2 flex items-center gap-3"><ProgressBar value={topic.progress} accent="bg-primary" /><span className="text-[11px] font-semibold text-muted-foreground">{topic.progress}%</span></div></div><span className="hidden text-[11px] font-semibold text-muted-foreground sm:block">{topic.duration}</span><ChevronDown size={16} className={cx('text-muted-foreground', open && 'rotate-180')} /></button>{open && <div className="border-t border-border bg-muted/30 p-2">{topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>}</div>; }
+function ActivityRow({ activity }: { activity: ActivityType }) { return <button data-testid={`button-activity-${activity.id}`} className="flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-card"><span className={cx('grid h-7 w-7 place-items-center rounded-lg', activity.status.toLowerCase().includes('complete') ? 'bg-[hsl(var(--primary)/.15)] text-primary' : 'bg-card text-primary shadow-sm border border-border')}>{activity.status.toLowerCase().includes('complete') ? <Check size={14} /> : activity.protected ? <LockKeyhole size={13} /> : <PlayIcon />}</span><span className="min-w-0 flex-1 truncate text-xs font-semibold">{activity.title}</span><span className="text-[11px] font-semibold text-muted-foreground">{activity.duration}</span></button>; }
 function PlayIcon() { return <span className="ml-0.5 h-0 w-0 border-y-[4px] border-l-[6px] border-y-transparent border-l-current" />; }
 function InfoLine({ label, value }: { label: string; value: string }) { return <div className="flex justify-between border-t border-border pt-3 text-sm"><span className="text-muted-foreground">{label}</span><span className="font-semibold">{value}</span></div>; }
 
 function AssignmentsPage() {
   const [status, setStatus] = useState(''); const [open, setOpen] = useState(false); const query = useListAssignments({ status: status || undefined }, { query: { queryKey: getListAssignmentsQueryKey({ status: status || undefined }) } }); const assignments = (query.data as Assignment[] | undefined) ?? [];
-  return <div><PageHeading eyebrow="Work queue" title="Assignments" description="Keep submissions, reviews and due dates visible in one calm queue." action={<Button testId="button-create-assignment" onClick={() => setOpen(true)}><Plus size={16} /> New assignment</Button>} /><div className="mb-6 flex items-center justify-between gap-3"><div className="flex gap-1 rounded-xl bg-muted p-1">{['', 'pending', 'submitted', 'overdue'].map((item) => <button key={item || 'all'} data-testid={`button-assignment-filter-${item || 'all'}`} onClick={() => setStatus(item)} className={cx('rounded-lg px-3 py-2 text-xs font-bold capitalize', status === item ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground')}>{item || 'All'}</button>)}</div><Button testId="button-assignment-filter-menu" variant="quiet"><Filter size={15} /> <span className="hidden sm:inline">Filter</span></Button></div>{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : assignments.length === 0 ? <EmptyPanel icon={ClipboardCheck} title="The queue is clear" description="No assignments are waiting in this view. A focused day ahead." action={<Button testId="button-empty-create-assignment" onClick={() => setOpen(true)}><Plus size={15} /> Add assignment</Button>} /> : <div className="overflow-x-auto rounded-2xl border border-border bg-card"><table className="w-full min-w-[700px] text-left"><thead><tr className="border-b border-border bg-muted/40 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground"><th className="px-5 py-4">Assignment</th><th className="px-5 py-4">Course</th><th className="px-5 py-4">Due</th><th className="px-5 py-4">Assessor</th><th className="px-5 py-4">Status</th><th className="px-5 py-4" /></tr></thead><tbody className="divide-y divide-border">{assignments.map((assignment) => <tr key={assignment.id} data-testid={`row-assignment-${assignment.id}`} className="hover:bg-muted/30"><td className="px-5 py-4"><div className="flex items-center gap-3"><span className={cx('h-2 w-2 rounded-full', assignment.priority === 'high' ? 'bg-destructive' : 'bg-accent')} /><div><p className="text-sm font-bold">{assignment.title}</p><p className="mt-1 text-xs text-muted-foreground">{assignment.submitted ? 'Submitted for review' : 'Learner submission'}</p></div></div></td><td className="px-5 py-4 text-sm text-muted-foreground">{assignment.course}</td><td className="px-5 py-4 font-mono-ui text-xs">{niceDate(assignment.dueDate)}</td><td className="px-5 py-4 text-sm">{assignment.assessor}</td><td className="px-5 py-4"><Pill>{assignment.status}</Pill></td><td className="px-5 py-4 text-right"><button data-testid={`button-assignment-more-${assignment.id}`} aria-label={`More actions for ${assignment.title}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button></td></tr>)}</tbody></table></div>}{open && <AssignmentForm onClose={() => setOpen(false)} />}</div>;
+  return <div><PageHeading eyebrow="Work queue" title="Assignments" description="Keep submissions, reviews and due dates visible in one calm queue." action={<Button testId="button-create-assignment" onClick={() => setOpen(true)}><Plus size={16} /> New assignment</Button>} /><div className="mb-6 flex items-center justify-between gap-3"><div className="flex gap-1 rounded-xl bg-muted p-1">{['', 'pending', 'submitted', 'overdue'].map((item) => <button key={item || 'all'} data-testid={`button-assignment-filter-${item || 'all'}`} onClick={() => setStatus(item)} className={cx('rounded-lg px-3 py-2 text-xs font-semibold capitalize', status === item ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground')}>{item || 'All'}</button>)}</div><Button testId="button-assignment-filter-menu" variant="quiet"><Filter size={15} /> <span className="hidden sm:inline">Filter</span></Button></div>{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : assignments.length === 0 ? <EmptyPanel icon={ClipboardCheck} title="The queue is clear" description="No assignments are waiting in this view. A focused day ahead." action={<Button testId="button-empty-create-assignment" onClick={() => setOpen(true)}><Plus size={15} /> Add assignment</Button>} /> : <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-xs"><table className="w-full min-w-[700px] text-left"><thead><tr className="border-b border-border bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><th className="px-5 py-4">Assignment</th><th className="px-5 py-4">Course</th><th className="px-5 py-4">Due</th><th className="px-5 py-4">Assessor</th><th className="px-5 py-4">Status</th><th className="px-5 py-4" /></tr></thead><tbody className="divide-y divide-border">{assignments.map((assignment) => { const isHigh = assignment.priority.toLowerCase().includes('high'); const isMed = assignment.priority.toLowerCase().includes('medium'); return <tr key={assignment.id} data-testid={`row-assignment-${assignment.id}`} className="hover:bg-muted/30"><td className="px-5 py-4"><div className="flex items-center gap-3"><span className={cx('h-2 w-2 rounded-full', isHigh ? 'bg-destructive' : isMed ? 'bg-amber-500' : 'bg-primary')} /><div><p className="text-sm font-bold">{assignment.title}</p><p className="mt-1 text-xs text-muted-foreground">{assignment.submitted ? 'Submitted for review' : 'Learner submission'}</p></div></div></td><td className="px-5 py-4 text-sm text-muted-foreground">{assignment.course}</td><td className="px-5 py-4 text-[11px] font-semibold">{niceDate(assignment.dueDate)}</td><td className="px-5 py-4 text-sm">{assignment.assessor}</td><td className="px-5 py-4"><Pill>{assignment.status}</Pill></td><td className="px-5 py-4 text-right"><button data-testid={`button-assignment-more-${assignment.id}`} aria-label={`More actions for ${assignment.title}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button></td></tr>; })}</tbody></table></div>}{open && <AssignmentForm onClose={() => setOpen(false)} />}</div>;
 }
 function AssignmentForm({ onClose }: { onClose: () => void }) { const create = useCreateAssignment(); const [form, setForm] = useState({ title: '', course: '', dueDate: '', assessor: '' }); const submit = (e: FormEvent) => { e.preventDefault(); create.mutate({ data: form }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListAssignmentsQueryKey() }); onClose(); } }); }; return <Modal title="New assignment" onClose={onClose}><form onSubmit={submit} className="space-y-4"><Field label="Assignment title"><input required data-testid="input-assignment-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="form-input" placeholder="e.g. Navigation watch report" /></Field><Field label="Course"><input required data-testid="input-assignment-course" value={form.course} onChange={(e) => setForm({ ...form, course: e.target.value })} className="form-input" placeholder="Course name or code" /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Due date"><input required type="date" data-testid="input-assignment-due-date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} className="form-input" /></Field><Field label="Assessor"><input required data-testid="input-assignment-assessor" value={form.assessor} onChange={(e) => setForm({ ...form, assessor: e.target.value })} className="form-input" /></Field></div><div className="flex justify-end gap-2 pt-3"><Button testId="button-cancel-assignment" variant="quiet" onClick={onClose}>Cancel</Button><Button testId="button-submit-assignment" type="submit" disabled={create.isPending}>{create.isPending ? 'Saving…' : 'Create assignment'}</Button></div></form></Modal>; }
 
 function SessionsPage() { const query = useListSessions({ query: { queryKey: getListSessionsQueryKey() } }); const sessions = (query.data as Session[] | undefined) ?? []; return <div><PageHeading eyebrow="Live learning" title="Sessions" description="Classrooms, webinars and practical sessions, all in one dependable rhythm." action={<Button testId="button-add-session" variant="outline"><Plus size={16} /> Add session</Button>} />{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : sessions.length === 0 ? <EmptyPanel icon={CalendarDays} title="No sessions scheduled" description="When a faculty member schedules a classroom or webinar, it will appear here." /> : <div className="grid gap-4 lg:grid-cols-2">{sessions.map((session, index) => <SessionCard key={session.id} session={session} index={index} />)}</div>}</div>; }
-function SessionCard({ session, index }: { session: Session; index: number }) { return <article data-testid={`card-session-${session.id}`} className="group rounded-2xl border border-border bg-card p-5 hover:-translate-y-0.5 hover:shadow-md sm:p-6"><div className="flex items-start justify-between gap-4"><div className="flex gap-4"><div className={cx('grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-primary-foreground', index % 2 ? 'bg-[hsl(166_43%_39%)]' : 'bg-primary')}><CalendarDays size={22} /></div><div><Pill>{session.type}</Pill><h2 className="mt-2 font-display text-xl font-bold">{session.title}</h2><p className="mt-1 text-xs text-muted-foreground">{session.course}</p></div></div><button data-testid={`button-session-more-${session.id}`} aria-label={`More actions for ${session.title}`} className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><MoreHorizontal size={17} /></button></div><div className="mt-6 grid grid-cols-2 gap-3 border-t border-border pt-4 sm:grid-cols-3"><InfoLine label="When" value={`${session.date} · ${session.time}`} /><InfoLine label="Where" value={session.location} /><InfoLine label="Faculty" value={session.faculty} /></div><div className="mt-5 flex items-center justify-between"><Pill tone={statusTone(session.attendance)}>{session.attendance}</Pill>{session.type.toLowerCase().includes('web') && <Button testId={`button-join-session-${session.id}`} variant="outline"><Video size={15} /> Join webinar</Button>}</div></article>; }
+function SessionCard({ session, index }: { session: Session; index: number }) { return <article data-testid={`card-session-${session.id}`} className="group rounded-xl border border-border bg-card p-5 hover:-translate-y-0.5 shadow-xs hover:shadow-md transition-all sm:p-6"><div className="flex items-start justify-between gap-4"><div className="flex gap-4"><div className={cx('grid h-14 w-14 shrink-0 place-items-center rounded-xl text-primary-foreground', index % 2 ? 'bg-[hsl(168_91%_25%)]' : 'bg-primary')}><CalendarDays size={22} /></div><div><Pill>{session.type}</Pill><h2 className="mt-2 text-lg font-bold">{session.title}</h2><p className="mt-1 text-xs font-medium text-muted-foreground">{session.course}</p></div></div><button data-testid={`button-session-more-${session.id}`} aria-label={`More actions for ${session.title}`} className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><MoreHorizontal size={17} /></button></div><div className="mt-6 grid grid-cols-2 gap-3 border-t border-border pt-4 sm:grid-cols-3"><InfoLine label="When" value={`${session.date} · ${session.time}`} /><InfoLine label="Where" value={session.location} /><InfoLine label="Faculty" value={session.faculty} /></div><div className="mt-5 flex items-center justify-between"><Pill tone={statusTone(session.attendance)}>{session.attendance}</Pill>{session.type.toLowerCase().includes('web') && <Button testId={`button-join-session-${session.id}`} variant="outline"><Video size={15} /> Join webinar</Button>}</div></article>; }
 
 function CertificatesPage() { const query = useListCertificates({ query: { queryKey: getListCertificatesQueryKey() } }); const certificates = (query.data as Certificate[] | undefined) ?? []; return <div><PageHeading eyebrow="Credentials & compliance" title="Certificates" description="A clear record of the credentials you have earned and the renewals ahead." action={<Button testId="button-download-certificate-pack" variant="outline"><Download size={16} /> Download record</Button>} />{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : certificates.length === 0 ? <EmptyPanel icon={Award} title="No certificates yet" description="Completed course credentials will be issued and stored here." action={<Link href="/courses" data-testid="link-empty-certificates-courses" className="mt-4 text-sm font-bold text-primary">View courses <ArrowRight size={14} className="ml-1 inline" /></Link>} /> : <div className="grid gap-4 md:grid-cols-2">{certificates.map((certificate, index) => <CertificateCard key={certificate.id} certificate={certificate} index={index} />)}</div>}</div>; }
-function CertificateCard({ certificate, index }: { certificate: Certificate; index: number }) { return <article data-testid={`card-certificate-${certificate.id}`} className="relative overflow-hidden rounded-2xl border border-border bg-card p-6"><div className="absolute right-0 top-0 h-32 w-32 translate-x-8 -translate-y-8 rounded-full border-[15px] border-accent/20" /><div className="relative flex items-start justify-between gap-4"><div><span className={cx('grid h-10 w-10 place-items-center rounded-xl', index % 2 ? 'bg-[hsl(var(--primary)/.1)] text-primary' : 'bg-[hsl(var(--accent)/.2)] text-[hsl(34_70%_40%)]')}><Award size={19} /></span><h2 className="mt-5 font-display text-xl font-bold">{certificate.title}</h2><p className="mt-1 text-sm text-muted-foreground">{certificate.course}</p></div><Pill>{certificate.status}</Pill></div><div className="mt-7 grid grid-cols-2 gap-4 border-t border-border pt-4"><div><p className="font-mono-ui text-[9px] uppercase text-muted-foreground">Issued</p><p className="mt-1 text-sm font-semibold">{niceDate(certificate.issuedOn)}</p></div><div><p className="font-mono-ui text-[9px] uppercase text-muted-foreground">Expires</p><p className="mt-1 text-sm font-semibold">{certificate.expiresOn ? niceDate(certificate.expiresOn) : 'No expiry'}</p></div></div><div className="mt-5 flex items-center justify-between"><span className="font-mono-ui text-[9px] uppercase tracking-wide text-muted-foreground">{certificate.serial}</span><button data-testid={`button-download-certificate-${certificate.id}`} className="flex items-center gap-1.5 text-xs font-bold text-primary hover:underline"><Download size={14} /> Download</button></div></article>; }
+function CertificateCard({ certificate, index }: { certificate: Certificate; index: number }) { return <article data-testid={`card-certificate-${certificate.id}`} className="relative overflow-hidden rounded-xl border border-border shadow-xs bg-card p-6"><div className="absolute right-0 top-0 h-32 w-32 translate-x-8 -translate-y-8 rounded-full border-[15px] border-primary/5" /><div className="relative flex items-start justify-between gap-4"><div><span className={cx('grid h-10 w-10 place-items-center rounded-lg', index % 2 ? 'bg-primary/10 text-primary' : 'bg-amber-100 text-amber-700')}><Award size={19} /></span><h2 className="mt-5 text-lg font-bold">{certificate.title}</h2><p className="mt-1 text-sm font-medium text-muted-foreground">{certificate.course}</p></div><Pill>{certificate.status}</Pill></div><div className="mt-7 grid grid-cols-2 gap-4 border-t border-border pt-4"><div><p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Issued</p><p className="mt-1 text-sm font-semibold">{niceDate(certificate.issuedOn)}</p></div><div><p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Expires</p><p className="mt-1 text-sm font-semibold">{certificate.expiresOn ? niceDate(certificate.expiresOn) : 'No expiry'}</p></div></div><div className="mt-5 flex items-center justify-between"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{certificate.serial}</span><button data-testid={`button-download-certificate-${certificate.id}`} className="flex items-center gap-1.5 text-xs font-bold text-primary hover:underline"><Download size={14} /> Download</button></div></article>; }
 
-function AnalyticsPage() { const query = useGetAnalyticsOverview({ query: { queryKey: getGetAnalyticsOverviewQueryKey() } }); const data = query.data as AnalyticsOverview | undefined; if (query.isLoading) return <LoadingPanel />; if (query.isError || !data) return <ErrorPanel onRetry={() => query.refetch()} />; const maxWeekly = Math.max(...data.weeklyActivity.map((item) => item.value), 1); return <div><PageHeading eyebrow="Operations intelligence" title="Analytics" description="A measured view of learner momentum, course performance and the work still to review." action={<Button testId="button-export-analytics" variant="outline"><Download size={16} /> Export report</Button>} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Active learners" value={data.activeLearners} hint="Across all programmes" icon={Users} /><MetricCard label="Completion rate" value={`${data.completionRate}%`} hint="All active courses" icon={TrendingUp} tone="teal" /><MetricCard label="Average progress" value={`${data.averageProgress}%`} hint="Current cohort" icon={Activity} tone="gold" /><MetricCard label="Pending reviews" value={data.pendingReviews} hint="Faculty queue" icon={ClipboardCheck} tone="violet" /></div><div className="mt-7 grid gap-7 xl:grid-cols-[1.25fr_1fr]"><section className="rounded-2xl border border-border bg-card p-6"><SectionTitle title="Weekly activity" meta="Last 7 weeks" /><div className="mt-8 flex h-64 items-end gap-2 sm:gap-4">{data.weeklyActivity.map((point) => <div key={point.label} className="group flex flex-1 flex-col items-center gap-2"><div className="relative flex h-52 w-full items-end"><div className="w-full rounded-t-lg bg-primary transition-all duration-500 group-hover:bg-accent" style={{ height: `${Math.max(5, point.value / maxWeekly * 100)}%` }} /></div><span className="font-mono-ui text-[9px] uppercase text-muted-foreground">{point.label}</span></div>)}</div></section><section className="rounded-2xl border border-border bg-card p-6"><SectionTitle title="Course performance" meta="Completion by route" /><div className="mt-6 space-y-5">{data.coursePerformance.map((point, index) => <div key={point.label}><div className="mb-2 flex justify-between gap-3 text-xs"><span className="truncate font-semibold">{point.label}</span><span className="font-mono-ui text-muted-foreground">{point.value}%</span></div><ProgressBar value={point.value} accent={index % 2 ? 'bg-[hsl(var(--accent))]' : 'bg-primary'} /></div>)}</div></section></div></div>; }
+function AnalyticsPage() { const query = useGetAnalyticsOverview({ query: { queryKey: getGetAnalyticsOverviewQueryKey() } }); const data = query.data as AnalyticsOverview | undefined; if (query.isLoading) return <LoadingPanel />; if (query.isError || !data) return <ErrorPanel onRetry={() => query.refetch()} />; const maxWeekly = Math.max(...data.weeklyActivity.map((item) => item.value), 1); return <div><PageHeading eyebrow="Operations intelligence" title="Analytics" description="A measured view of learner momentum, course performance and the work still to review." action={<Button testId="button-export-analytics" variant="outline"><Download size={16} /> Export report</Button>} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Active learners" value={data.activeLearners} hint="Across all programmes" icon={Users} /><MetricCard label="Completion rate" value={`${data.completionRate}%`} hint="All active courses" icon={TrendingUp} /><MetricCard label="Average progress" value={`${data.averageProgress}%`} hint="Current cohort" icon={Activity} /><MetricCard label="Pending reviews" value={data.pendingReviews} hint="Faculty queue" icon={ClipboardCheck} /></div><div className="mt-7 grid gap-7 xl:grid-cols-[1.25fr_1fr]"><section className="rounded-xl border border-border bg-card shadow-xs p-6"><SectionTitle title="Weekly activity" meta="Last 7 weeks" /><div className="mt-8 flex h-64 items-end gap-2 sm:gap-4">{data.weeklyActivity.map((point) => <div key={point.label} className="group flex flex-1 flex-col items-center gap-2"><div className="relative flex h-52 w-full items-end"><div className="w-full rounded-t-sm bg-primary transition-all duration-500 group-hover:bg-primary/80" style={{ height: `${Math.max(5, point.value / maxWeekly * 100)}%` }} /></div><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{point.label}</span></div>)}</div></section><section className="rounded-xl border border-border bg-card shadow-xs p-6"><SectionTitle title="Course performance" meta="Completion by route" /><div className="mt-6 space-y-5">{data.coursePerformance.map((point, index) => <div key={point.label}><div className="mb-2 flex justify-between gap-3 text-xs"><span className="truncate font-semibold">{point.label}</span><span className="font-semibold text-muted-foreground">{point.value}%</span></div><ProgressBar value={point.value} accent={index % 2 ? 'bg-[hsl(168_91%_25%)]' : 'bg-primary'} /></div>)}</div></section></div></div>; }
 
-function UsersPage() { const query = useListUsers({ query: { queryKey: getListUsersQueryKey() } }); const importUsers = useImportUsers(); const [search, setSearch] = useState(''); const [open, setOpen] = useState(false); const [notice, setNotice] = useState(''); const users = ((query.data as User[] | undefined) ?? []).filter((user) => `${user.name} ${user.email} ${user.role}`.toLowerCase().includes(search.toLowerCase())); const submitImport = () => { importUsers.mutate({ data: { filename: 'himt-learners.csv', rows: 24 } }, { onSuccess: (result) => { setNotice(`${result.valid} records ready · ${result.warnings} warnings`); setOpen(false); queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() }); } }); }; return <div><PageHeading eyebrow="People & access" title="Users & roles" description="Keep learner, faculty and operations access aligned with the right programme group." action={<Button testId="button-import-users" onClick={() => setOpen(true)}><Upload size={16} /> Import users</Button>} />{notice && <div data-testid="status-import-result" className="mb-5 flex items-center gap-2 rounded-xl border border-[hsl(var(--accent)/.35)] bg-[hsl(var(--accent)/.14)] p-3 text-sm font-semibold text-primary"><Check size={16} /> {notice}<button data-testid="button-dismiss-import-result" onClick={() => setNotice('')} className="ml-auto"><X size={15} /></button></div>}<div className="mb-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-3"><Search size={17} className="ml-2 text-muted-foreground" /><input data-testid="input-search-users" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search people, email or role" className="h-10 flex-1 bg-transparent text-sm outline-none" /><span className="hidden rounded-lg bg-muted px-2.5 py-1 font-mono-ui text-[10px] text-muted-foreground sm:block">{users.length} people</span></div>{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : users.length === 0 ? <EmptyPanel icon={Users} title="No users found" description="Try a different name or import a learner roster to get started." action={<Button testId="button-empty-import-users" onClick={() => setOpen(true)}><FileUp size={15} /> Import roster</Button>} /> : <div className="overflow-x-auto rounded-2xl border border-border bg-card"><table className="w-full min-w-[720px] text-left"><thead><tr className="border-b border-border bg-muted/40 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground"><th className="px-5 py-4">Person</th><th className="px-5 py-4">Role</th><th className="px-5 py-4">Group</th><th className="px-5 py-4">Status</th><th className="px-5 py-4">Last activity</th><th /></tr></thead><tbody className="divide-y divide-border">{users.map((user) => <tr key={user.id} data-testid={`row-user-${user.id}`} className="hover:bg-muted/30"><td className="px-5 py-4"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-[hsl(var(--accent)/.22)] text-xs font-bold text-primary">{initials(user.name)}</span><div><p className="text-sm font-bold">{user.name}</p><p className="text-xs text-muted-foreground">{user.email}</p></div></div></td><td className="px-5 py-4"><Pill>{user.role}</Pill></td><td className="px-5 py-4 text-sm text-muted-foreground">{user.group}</td><td className="px-5 py-4"><Pill>{user.status}</Pill></td><td className="px-5 py-4 font-mono-ui text-xs text-muted-foreground">{niceDate(user.lastActivity)}</td><td className="px-5 py-4 text-right"><button data-testid={`button-user-more-${user.id}`} aria-label={`More actions for ${user.name}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button></td></tr>)}</tbody></table></div>}{open && <Modal title="Import user roster" onClose={() => setOpen(false)}><div className="rounded-2xl border-2 border-dashed border-border bg-muted/30 p-8 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[hsl(var(--accent)/.2)] text-primary"><FileUp size={22} /></span><h3 className="mt-4 font-display text-lg font-bold">Drop your CSV roster here</h3><p className="mt-1 text-sm text-muted-foreground">The preview will flag missing emails and unknown groups before import.</p><Button testId="button-select-user-file" variant="outline" onClick={submitImport} disabled={importUsers.isPending} >{importUsers.isPending ? 'Importing…' : 'Choose CSV file'}</Button></div><div className="mt-4 flex justify-end"><Button testId="button-cancel-user-import" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button></div></Modal>}</div>; }
+function UsersPage() { const query = useListUsers({ query: { queryKey: getListUsersQueryKey() } }); const importUsers = useImportUsers(); const [search, setSearch] = useState(''); const [open, setOpen] = useState(false); const [notice, setNotice] = useState(''); const users = ((query.data as User[] | undefined) ?? []).filter((user) => `${user.name} ${user.email} ${user.role}`.toLowerCase().includes(search.toLowerCase())); const submitImport = () => { importUsers.mutate({ data: { filename: 'himt-learners.csv', rows: 24 } }, { onSuccess: (result) => { setNotice(`${result.valid} records ready · ${result.warnings} warnings`); setOpen(false); queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() }); } }); }; return <div><PageHeading eyebrow="People & access" title="Users & roles" description="Keep learner, faculty and operations access aligned with the right programme group." action={<Button testId="button-import-users" onClick={() => setOpen(true)}><Upload size={16} /> Import users</Button>} />{notice && <div data-testid="status-import-result" className="mb-5 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/10 p-3 text-sm font-semibold text-primary"><Check size={16} /> {notice}<button data-testid="button-dismiss-import-result" onClick={() => setNotice('')} className="ml-auto"><X size={15} /></button></div>}<div className="mb-6 flex items-center gap-3 rounded-xl border border-border shadow-xs bg-card p-3"><Search size={17} className="ml-2 text-muted-foreground" /><input data-testid="input-search-users" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search people, email or role" className="h-10 flex-1 bg-transparent text-sm outline-none" /><span className="hidden rounded-lg bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground sm:block">{users.length} people</span></div>{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : users.length === 0 ? <EmptyPanel icon={Users} title="No users found" description="Try a different name or import a learner roster to get started." action={<Button testId="button-empty-import-users" onClick={() => setOpen(true)}><FileUp size={15} /> Import roster</Button>} /> : <div className="overflow-x-auto rounded-xl border border-border shadow-xs bg-card"><table className="w-full min-w-[720px] text-left"><thead><tr className="border-b border-border bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><th className="px-5 py-4">Person</th><th className="px-5 py-4">Role</th><th className="px-5 py-4">Group</th><th className="px-5 py-4">Status</th><th className="px-5 py-4">Last activity</th><th /></tr></thead><tbody className="divide-y divide-border">{users.map((user) => <tr key={user.id} data-testid={`row-user-${user.id}`} className="hover:bg-muted/30"><td className="px-5 py-4"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">{initials(user.name)}</span><div><p className="text-sm font-bold">{user.name}</p><p className="text-xs text-muted-foreground">{user.email}</p></div></div></td><td className="px-5 py-4"><Pill>{user.role}</Pill></td><td className="px-5 py-4 text-sm text-muted-foreground">{user.group}</td><td className="px-5 py-4"><Pill>{user.status}</Pill></td><td className="px-5 py-4 text-[11px] font-semibold text-muted-foreground">{niceDate(user.lastActivity)}</td><td className="px-5 py-4 text-right"><button data-testid={`button-user-more-${user.id}`} aria-label={`More actions for ${user.name}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button></td></tr>)}</tbody></table></div>}{open && <Modal title="Import user roster" onClose={() => setOpen(false)}><div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary"><FileUp size={22} /></span><h3 className="mt-4 text-lg font-bold">Drop your CSV roster here</h3><p className="mt-1 text-sm text-muted-foreground">The preview will flag missing emails and unknown groups before import.</p><Button testId="button-select-user-file" variant="outline" onClick={submitImport} disabled={importUsers.isPending} >{importUsers.isPending ? 'Importing…' : 'Choose CSV file'}</Button></div><div className="mt-4 flex justify-end"><Button testId="button-cancel-user-import" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button></div></Modal>}</div>; }
 
-function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="block"><span className="mb-1.5 block font-mono-ui text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>{children}</label>; }
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) { return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-[hsl(var(--foreground)/.35)] p-4 backdrop-blur-sm"><div className="max-h-[90dvh] w-full max-w-lg overflow-auto rounded-2xl border border-border bg-card p-6 shadow-2xl sm:p-7"><div className="mb-6 flex items-center justify-between"><h2 className="font-display text-2xl font-bold">{title}</h2><button data-testid="button-close-modal" aria-label="Close dialog" onClick={onClose} className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><X size={18} /></button></div>{children}</div></div>; }
+function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="block"><span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>{children}</label>; }
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) { return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-[hsl(var(--foreground)/.35)] p-4 backdrop-blur-sm"><div className="max-h-[90dvh] w-full max-w-lg overflow-auto rounded-xl border border-border bg-card p-6 shadow-2xl sm:p-7"><div className="mb-6 flex items-center justify-between"><h2 className="text-2xl font-bold">{title}</h2><button data-testid="button-close-modal" aria-label="Close dialog" onClick={onClose} className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><X size={18} /></button></div>{children}</div></div>; }
 
-function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/courses" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+// ─── Curriculum helpers ───────────────────────────────────────────────────────
+const PROGRAMME_OUTCOMES = ['PO1','PO2','PO3','PO4','PO5','PO6','PO7','PO8','PO9','PO10','PO11','PO12'];
+const PO_LABELS: Record<string, string> = {
+  PO1: 'Engineering Knowledge', PO2: 'Problem Analysis', PO3: 'Design/Development',
+  PO4: 'Investigations', PO5: 'Modern Tools', PO6: 'Engineer & Society',
+  PO7: 'Environment', PO8: 'Ethics', PO9: 'Individual & Team',
+  PO10: 'Communication', PO11: 'Project Management', PO12: 'Life-long Learning',
+};
+function bloomsTone(level: string) {
+  const m: Record<string, string> = {
+    remember:   'bg-slate-100 text-slate-700 border-slate-200',
+    understand: 'bg-blue-50 text-blue-700 border-blue-200',
+    apply:      'bg-emerald-50 text-emerald-700 border-emerald-200',
+    analyze:    'bg-amber-50 text-amber-700 border-amber-200',
+    evaluate:   'bg-orange-50 text-orange-700 border-orange-200',
+    create:     'bg-purple-50 text-purple-700 border-purple-200',
+  };
+  return m[level.toLowerCase()] ?? 'bg-gray-100 text-gray-600 border-gray-200';
+}
+function activityIcon(type: string) {
+  const t = type.toLowerCase();
+  if (t.includes('video')) return <Video size={13} />;
+  if (t.includes('quiz') || t.includes('exam') || t.includes('assessment')) return <ClipboardCheck size={13} />;
+  if (t.includes('assignment')) return <FileUp size={13} />;
+  if (t.includes('activity')) return <Activity size={13} />;
+  return <BookOpen size={13} />;
+}
+function courseTypeTone(type: string) {
+  if (type === 'Core') return 'bg-emerald-50 text-emerald-700';
+  if (type === 'Lab') return 'bg-orange-50 text-orange-700';
+  return 'bg-blue-50 text-blue-700';
+}
+
+// ─── CurriculumPage ───────────────────────────────────────────────────────────
+function CurriculumPage() {
+  const [selectedProgrammeId, setSelectedProgrammeId] = useState('prog-btme');
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>('cur-brm501');
+  const [activeTab, setActiveTab] = useState<'overview' | 'structure' | 'mapping'>('overview');
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set(['mod-brm-1']));
+  const [addingCO, setAddingCO] = useState(false);
+
+  const programmesQ = useListProgrammes({ query: { queryKey: getListProgrammesQueryKey() } });
+  const coursesQ = useListProgrammeCourses(selectedProgrammeId, { query: { queryKey: getListProgrammeCoursesQueryKey(selectedProgrammeId) } });
+  const outlineQ = useGetCurriculumCourseOutline(selectedCourseId ?? '', {
+    query: { queryKey: getGetCurriculumCourseOutlineQueryKey(selectedCourseId ?? ''), enabled: Boolean(selectedCourseId) },
+  });
+  const addOutcome = useAddCourseOutcome();
+
+  const programmes = (programmesQ.data as Programme[] | undefined) ?? [];
+  const courses    = (coursesQ.data as ProgrammeCourse[] | undefined) ?? [];
+  const outline    = outlineQ.data as CurriculumCourse | undefined;
+
+  const bySemester = courses.reduce<Record<number, ProgrammeCourse[]>>((acc, c) => {
+    if (!acc[c.semester]) acc[c.semester] = [];
+    acc[c.semester].push(c);
+    return acc;
+  }, {});
+
+  function toggleModule(id: string) {
+    setExpandedModules(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <div>
+      <PageHeading
+        eyebrow="Academic structure"
+        title="Curriculum"
+        description="Manage programme structures, course outlines, learning outcomes and outcome-based mapping."
+        action={<Button testId="button-add-co" onClick={() => setAddingCO(true)}><Plus size={16} /> Add outcome</Button>}
+      />
+
+      <div className="flex gap-6 items-start">
+        {/* ── Left sidebar ── */}
+        <aside className="w-[272px] shrink-0 rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+          <div className="border-b border-border p-4">
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Programme</p>
+            {programmesQ.isLoading
+              ? <Skeleton className="h-9 w-full" />
+              : <select
+                  data-testid="select-programme"
+                  value={selectedProgrammeId}
+                  onChange={e => { setSelectedProgrammeId(e.target.value); setSelectedCourseId(null); }}
+                  className="h-9 w-full rounded-lg border border-border bg-muted/40 px-2.5 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring/30"
+                >
+                  {programmes.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+                </select>
+            }
+          </div>
+
+          <div className="max-h-[calc(100vh-260px)] overflow-y-auto p-2">
+            {coursesQ.isLoading
+              ? <div className="space-y-2 p-2"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></div>
+              : Object.entries(bySemester).map(([sem, semCourses]) => (
+                <div key={sem} className="mb-3">
+                  <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Semester {sem}</p>
+                  {semCourses.map(course => (
+                    <button
+                      key={course.id}
+                      data-testid={`button-curriculum-course-${course.id}`}
+                      onClick={() => { setSelectedCourseId(course.id); setActiveTab('overview'); setExpandedModules(new Set()); }}
+                      className={cx(
+                        'group mb-0.5 w-full rounded-lg p-2.5 text-left transition',
+                        selectedCourseId === course.id
+                          ? 'bg-primary/10 text-primary'
+                          : 'hover:bg-muted text-foreground'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-xs font-bold">{course.name}</span>
+                        <span className={cx('shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase', courseTypeTone(course.type))}>{course.type}</span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-[10px] font-semibold text-muted-foreground">{course.code}</span>
+                        <span className="text-[10px] text-muted-foreground">·</span>
+                        <span className="text-[10px] font-semibold text-muted-foreground">{course.credits} cr</span>
+                        {course.status === 'Draft' && <span className="ml-auto text-[9px] font-bold uppercase text-amber-600">Draft</span>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ))
+            }
+          </div>
+        </aside>
+
+        {/* ── Main content ── */}
+        <div className="min-w-0 flex-1">
+          {!selectedCourseId
+            ? <EmptyPanel icon={BookMarked} title="Select a course" description="Choose a course from the programme list on the left to view its curriculum outline and outcomes." />
+            : outlineQ.isLoading
+              ? <LoadingPanel />
+              : outlineQ.isError || !outline
+                ? <ErrorPanel onRetry={() => outlineQ.refetch()} />
+                : (
+                  <div className="space-y-5">
+                    {/* Course header */}
+                    <div className="rounded-xl border border-border bg-card shadow-xs p-5">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{outline.code}</span>
+                            <span className="text-muted-foreground">·</span>
+                            <span className={cx('rounded px-2 py-0.5 text-[10px] font-bold uppercase', courseTypeTone(outline.type))}>{outline.type}</span>
+                            <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-600">Sem {outline.semester}</span>
+                            <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-600">{outline.credits} Credits</span>
+                          </div>
+                          <h2 className="mt-2 text-xl font-bold">{outline.name}</h2>
+                          <p className="mt-1 text-sm text-muted-foreground">{outline.programmeName}</p>
+                        </div>
+                        <div className="flex shrink-0 gap-3 text-center">
+                          <div className="rounded-lg border border-border px-4 py-2">
+                            <p className="text-lg font-bold text-primary">{outline.outcomes.length}</p>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Outcomes</p>
+                          </div>
+                          <div className="rounded-lg border border-border px-4 py-2">
+                            <p className="text-lg font-bold">{outline.modules.length}</p>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Modules</p>
+                          </div>
+                          <div className="rounded-lg border border-border px-4 py-2">
+                            <p className="text-lg font-bold">{outline.modules.reduce((sum, m) => sum + m.topics.reduce((s2, t) => s2 + t.activities.length, 0), 0)}</p>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Activities</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Tab bar */}
+                    <div className="flex gap-1 rounded-lg bg-muted p-1 w-fit">
+                      {(['overview', 'structure', 'mapping'] as const).map(tab => (
+                        <button
+                          key={tab}
+                          data-testid={`button-curriculum-tab-${tab}`}
+                          onClick={() => setActiveTab(tab)}
+                          className={cx(
+                            'rounded-md px-4 py-2 text-sm font-semibold capitalize transition',
+                            activeTab === tab ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          {tab === 'mapping' ? 'CO-PO Mapping' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* ── Overview tab ── */}
+                    {activeTab === 'overview' && (
+                      <div className="space-y-5">
+                        <div className="rounded-xl border border-border bg-card shadow-xs p-5">
+                          <h3 className="mb-2 text-sm font-bold">Course Description</h3>
+                          <p className="text-sm leading-relaxed text-muted-foreground">{outline.description}</p>
+                        </div>
+
+                        <div className="rounded-xl border border-border bg-card shadow-xs">
+                          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+                            <div>
+                              <h3 className="font-bold">Course Outcomes</h3>
+                              <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{outline.outcomes.length} defined</p>
+                            </div>
+                            <Button testId="button-add-outcome-inline" onClick={() => setAddingCO(true)} variant="outline"><Plus size={14} /> Add CO</Button>
+                          </div>
+                          <div className="divide-y divide-border">
+                            {outline.outcomes.map(co => (
+                              <div key={co.id} data-testid={`row-co-${co.id}`} className="flex gap-4 px-5 py-4">
+                                <div className="flex h-8 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-black text-primary">{co.code}</div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm leading-relaxed">{co.description}</p>
+                                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                    <span className={cx('rounded border px-2 py-0.5 text-[10px] font-bold', bloomsTone(co.bloomsLevel))}>{co.bloomsLevel}</span>
+                                    {co.poMapping.map(po => (
+                                      <span key={po} title={PO_LABELS[po]} className="rounded border border-primary/20 bg-primary/5 px-1.5 py-0.5 text-[10px] font-bold text-primary">{po}</span>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Structure tab ── */}
+                    {activeTab === 'structure' && (
+                      <div className="space-y-3">
+                        {outline.modules.map(mod => (
+                          <div key={mod.id} data-testid={`block-module-${mod.id}`} className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+                            <button
+                              data-testid={`button-toggle-module-${mod.id}`}
+                              onClick={() => toggleModule(mod.id)}
+                              className="flex w-full items-center gap-4 px-5 py-4 text-left hover:bg-muted/40"
+                            >
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-black text-primary-foreground">{mod.order}</span>
+                              <div className="min-w-0 flex-1">
+                                <p className="font-bold">{mod.title}</p>
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {mod.coIds.map(cid => {
+                                    const co = outline.outcomes.find(o => o.id === cid);
+                                    return co ? <span key={cid} className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">{co.code}</span> : null;
+                                  })}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 text-right text-[10px] font-semibold text-muted-foreground">
+                                <span>{mod.topics.length} topics</span>
+                                <ChevronDown size={16} className={cx('transition-transform text-muted-foreground', expandedModules.has(mod.id) && 'rotate-180')} />
+                              </div>
+                            </button>
+
+                            {expandedModules.has(mod.id) && (
+                              <div className="border-t border-border bg-muted/20">
+                                {mod.topics.map((topic, ti) => (
+                                  <div key={topic.id} data-testid={`block-topic-${topic.id}`} className={cx(ti > 0 && 'border-t border-border/60')}>
+                                    <div className="flex items-center gap-3 px-6 py-3">
+                                      <span className="text-[11px] font-bold tabular-nums text-muted-foreground">{String(ti + 1).padStart(2, '0')}</span>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-semibold">{topic.title}</p>
+                                      </div>
+                                      <span className="shrink-0 rounded bg-card px-2 py-0.5 text-[10px] font-semibold text-muted-foreground border border-border">{topic.type}</span>
+                                      <span className="shrink-0 text-[11px] font-semibold text-muted-foreground">{topic.duration}</span>
+                                    </div>
+                                    <div className="space-y-0.5 px-6 pb-3">
+                                      {topic.activities.map(act => (
+                                        <div key={act.id} data-testid={`row-activity-${act.id}`} className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-card">
+                                          <span className="grid h-6 w-6 shrink-0 place-items-center rounded text-muted-foreground bg-card border border-border">
+                                            {activityIcon(act.type)}
+                                          </span>
+                                          <span className="min-w-0 flex-1 truncate text-xs font-medium">{act.title}</span>
+                                          <div className="flex shrink-0 items-center gap-1.5">
+                                            {act.coIds.map(cid => {
+                                              const co = outline.outcomes.find(o => o.id === cid);
+                                              return co ? <span key={cid} className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold text-primary">{co.code}</span> : null;
+                                            })}
+                                            <span className="text-[10px] text-muted-foreground">{act.duration}</span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* ── CO-PO Mapping tab ── */}
+                    {activeTab === 'mapping' && (
+                      <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+                        <div className="border-b border-border px-5 py-4">
+                          <h3 className="font-bold">CO-PO Mapping Matrix</h3>
+                          <p className="mt-0.5 text-xs text-muted-foreground">Course Outcomes mapped to Programme Outcomes (NBA framework). Hover a PO header for its full title.</p>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b border-border bg-muted/40">
+                                <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground w-72">Course Outcome</th>
+                                <th className="px-2 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Bloom's</th>
+                                {PROGRAMME_OUTCOMES.map(po => (
+                                  <th key={po} title={PO_LABELS[po]} className="px-2 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-help">{po}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {outline.outcomes.map(co => (
+                                <tr key={co.id} data-testid={`mapping-row-${co.id}`} className="hover:bg-muted/20">
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-start gap-2">
+                                      <span className="mt-0.5 shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-black text-primary">{co.code}</span>
+                                      <span className="text-xs leading-relaxed text-muted-foreground line-clamp-2">{co.description}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-2 py-3 text-center">
+                                    <span className={cx('rounded border px-1.5 py-0.5 text-[9px] font-bold', bloomsTone(co.bloomsLevel))}>{co.bloomsLevel.slice(0, 3)}</span>
+                                  </td>
+                                  {PROGRAMME_OUTCOMES.map(po => (
+                                    <td key={po} className="px-2 py-3 text-center">
+                                      {co.poMapping.includes(po)
+                                        ? <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary">
+                                            <span className="h-2.5 w-2.5 rounded-full bg-primary" />
+                                          </span>
+                                        : <span className="inline-block h-2 w-2 rounded-full bg-border" />
+                                      }
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="border-t border-border px-5 py-3">
+                          <div className="flex flex-wrap gap-x-6 gap-y-1 text-[10px] text-muted-foreground">
+                            {PROGRAMME_OUTCOMES.slice(0, 6).map(po => (
+                              <span key={po}><strong className="text-foreground">{po}</strong>: {PO_LABELS[po]}</span>
+                            ))}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[10px] text-muted-foreground">
+                            {PROGRAMME_OUTCOMES.slice(6).map(po => (
+                              <span key={po}><strong className="text-foreground">{po}</strong>: {PO_LABELS[po]}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+          }
+        </div>
+      </div>
+
+      {/* ── Add CO modal ── */}
+      {addingCO && selectedCourseId && (
+        <AddCOModal
+          courseId={selectedCourseId}
+          existingCount={outline?.outcomes.length ?? 0}
+          onClose={() => setAddingCO(false)}
+          onSaved={() => {
+            setAddingCO(false);
+            outlineQ.refetch();
+          }}
+          addOutcome={addOutcome}
+        />
+      )}
+    </div>
+  );
+}
+
+function AddCOModal({ courseId, existingCount, onClose, onSaved, addOutcome }: {
+  courseId: string; existingCount: number; onClose: () => void; onSaved: () => void;
+  addOutcome: ReturnType<typeof useAddCourseOutcome>;
+}) {
+  const [form, setForm] = useState<CourseOutcomeInput>({ description: '', bloomsLevel: 'Understand', poMapping: [] });
+  const togglePO = (po: string) => setForm(f => ({
+    ...f,
+    poMapping: f.poMapping.includes(po) ? f.poMapping.filter(p => p !== po) : [...f.poMapping, po],
+  }));
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    addOutcome.mutate({ courseId, data: form }, { onSuccess: onSaved });
+  };
+  return (
+    <Modal title={`Add Course Outcome — CO${existingCount + 1}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="Outcome description">
+          <textarea required data-testid="input-co-description" value={form.description}
+            onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+            placeholder="e.g. Apply passage planning methodology using ECDIS for ocean voyages"
+            rows={3} className="form-input h-auto py-2.5 resize-none" />
+        </Field>
+        <Field label="Bloom's taxonomy level">
+          <select data-testid="select-co-blooms" value={form.bloomsLevel}
+            onChange={e => setForm(f => ({ ...f, bloomsLevel: e.target.value }))}
+            className="form-input">
+            {['Remember','Understand','Apply','Analyze','Evaluate','Create'].map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </Field>
+        <div>
+          <span className="mb-2 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Programme outcome mapping</span>
+          <div className="flex flex-wrap gap-1.5">
+            {PROGRAMME_OUTCOMES.map(po => (
+              <button key={po} type="button" data-testid={`toggle-po-${po}`}
+                onClick={() => togglePO(po)}
+                title={PO_LABELS[po]}
+                className={cx('rounded border px-2.5 py-1 text-xs font-bold transition',
+                  form.poMapping.includes(po)
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground'
+                )}>{po}</button>
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button testId="button-cancel-co" variant="quiet" onClick={onClose}>Cancel</Button>
+          <Button testId="button-submit-co" type="submit" disabled={addOutcome.isPending}>{addOutcome.isPending ? 'Saving…' : 'Add outcome'}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppRouter /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
 export default App;

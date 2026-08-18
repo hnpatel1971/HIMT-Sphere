@@ -216,6 +216,100 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/User"
+  /curriculum/programmes:
+    get:
+      operationId: listProgrammes
+      tags: [curriculum]
+      summary: List academic programmes
+      responses:
+        "200":
+          description: Programme list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Programme"
+  /curriculum/programmes/{programmeId}/courses:
+    get:
+      operationId: listProgrammeCourses
+      tags: [curriculum]
+      summary: List courses within a programme
+      parameters:
+        - in: path
+          name: programmeId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Courses for the programme
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProgrammeCourse"
+        "404":
+          description: Programme not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /curriculum/courses/{courseId}/outline:
+    get:
+      operationId: getCurriculumCourseOutline
+      tags: [curriculum]
+      summary: Get full course curriculum outline with COs and modules
+      parameters:
+        - in: path
+          name: courseId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Full curriculum outline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurriculumCourse"
+        "404":
+          description: Course not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /curriculum/courses/{courseId}/outcomes:
+    post:
+      operationId: addCourseOutcome
+      tags: [curriculum]
+      summary: Add a course outcome
+      parameters:
+        - in: path
+          name: courseId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CourseOutcomeInput"
+      responses:
+        "201":
+          description: Created outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CourseOutcome"
+        "404":
+          description: Course not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /users/import:
     post:
       operationId: importUsers
@@ -449,4 +543,109 @@ components:
         label: { type: string }
         value: { type: number }
       required: [label, value]
+    Programme:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        code: { type: string }
+        department: { type: string }
+        duration: { type: string }
+        totalCourses: { type: number }
+        publishedCourses: { type: number }
+        totalLearners: { type: number }
+        status: { type: string }
+      required: [id, name, code, department, duration, totalCourses, publishedCourses, totalLearners, status]
+    ProgrammeCourse:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        code: { type: string }
+        semester: { type: number }
+        credits: { type: number }
+        type: { type: string }
+        status: { type: string }
+        outcomesCount: { type: number }
+        modulesCount: { type: number }
+        activitiesCount: { type: number }
+      required: [id, name, code, semester, credits, type, status, outcomesCount, modulesCount, activitiesCount]
+    CourseOutcome:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        description: { type: string }
+        bloomsLevel: { type: string }
+        poMapping:
+          type: array
+          items: { type: string }
+      required: [id, code, description, bloomsLevel, poMapping]
+    CourseOutcomeInput:
+      type: object
+      properties:
+        description: { type: string, minLength: 1 }
+        bloomsLevel: { type: string }
+        poMapping:
+          type: array
+          items: { type: string }
+      required: [description, bloomsLevel, poMapping]
+    CurriculumActivity:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        type: { type: string }
+        duration: { type: string }
+        coIds:
+          type: array
+          items: { type: string }
+      required: [id, title, type, duration, coIds]
+    CurriculumTopic:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        duration: { type: string }
+        type: { type: string }
+        activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurriculumActivity"
+      required: [id, title, duration, type, activities]
+    CurriculumModule:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        order: { type: number }
+        coIds:
+          type: array
+          items: { type: string }
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurriculumTopic"
+      required: [id, title, order, coIds, topics]
+    CurriculumCourse:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        code: { type: string }
+        credits: { type: number }
+        semester: { type: number }
+        type: { type: string }
+        description: { type: string }
+        outcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/CourseOutcome"
+        modules:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurriculumModule"
+        programmeId: { type: string }
+        programmeName: { type: string }
+      required: [id, name, code, credits, semester, type, description, outcomes, modules, programmeId, programmeName]
 

@@ -309,6 +309,116 @@ export const ListUsersResponse = zod.array(ListUsersResponseItem)
 
 
 /**
+ * @summary List academic programmes
+ */
+export const ListProgrammesResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "department": zod.string(),
+  "duration": zod.string(),
+  "totalCourses": zod.number(),
+  "publishedCourses": zod.number(),
+  "totalLearners": zod.number(),
+  "status": zod.string()
+})
+export const ListProgrammesResponse = zod.array(ListProgrammesResponseItem)
+
+
+/**
+ * @summary List courses within a programme
+ */
+export const ListProgrammeCoursesParams = zod.object({
+  "programmeId": zod.coerce.string()
+})
+
+export const ListProgrammeCoursesResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "semester": zod.number(),
+  "credits": zod.number(),
+  "type": zod.string(),
+  "status": zod.string(),
+  "outcomesCount": zod.number(),
+  "modulesCount": zod.number(),
+  "activitiesCount": zod.number()
+})
+export const ListProgrammeCoursesResponse = zod.array(ListProgrammeCoursesResponseItem)
+
+
+/**
+ * @summary Get full course curriculum outline with COs and modules
+ */
+export const GetCurriculumCourseOutlineParams = zod.object({
+  "courseId": zod.coerce.string()
+})
+
+export const GetCurriculumCourseOutlineResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "credits": zod.number(),
+  "semester": zod.number(),
+  "type": zod.string(),
+  "description": zod.string(),
+  "outcomes": zod.array(zod.object({
+  "id": zod.string(),
+  "code": zod.string(),
+  "description": zod.string(),
+  "bloomsLevel": zod.string(),
+  "poMapping": zod.array(zod.string())
+})),
+  "modules": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "order": zod.number(),
+  "coIds": zod.array(zod.string()),
+  "topics": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "duration": zod.string(),
+  "type": zod.string(),
+  "activities": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "type": zod.string(),
+  "duration": zod.string(),
+  "coIds": zod.array(zod.string())
+}))
+}))
+})),
+  "programmeId": zod.string(),
+  "programmeName": zod.string()
+})
+
+
+/**
+ * @summary Add a course outcome
+ */
+export const AddCourseOutcomeParams = zod.object({
+  "courseId": zod.coerce.string()
+})
+
+
+
+
+export const AddCourseOutcomeBody = zod.object({
+  "description": zod.string().min(1),
+  "bloomsLevel": zod.string(),
+  "poMapping": zod.array(zod.string())
+})
+
+export const AddCourseOutcomeResponse = zod.object({
+  "id": zod.string(),
+  "code": zod.string(),
+  "description": zod.string(),
+  "bloomsLevel": zod.string(),
+  "poMapping": zod.array(zod.string())
+})
+
+
+/**
  * @summary Start a user import
  */
 

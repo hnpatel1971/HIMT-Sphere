@@ -175,6 +175,84 @@ export interface AnalyticsOverview {
   coursePerformance: MetricPoint[];
 }
 
+export interface Programme {
+  id: string;
+  name: string;
+  code: string;
+  department: string;
+  duration: string;
+  totalCourses: number;
+  publishedCourses: number;
+  totalLearners: number;
+  status: string;
+}
+
+export interface ProgrammeCourse {
+  id: string;
+  name: string;
+  code: string;
+  semester: number;
+  credits: number;
+  type: string;
+  status: string;
+  outcomesCount: number;
+  modulesCount: number;
+  activitiesCount: number;
+}
+
+export interface CourseOutcome {
+  id: string;
+  code: string;
+  description: string;
+  bloomsLevel: string;
+  poMapping: string[];
+}
+
+export interface CourseOutcomeInput {
+  /** @minLength 1 */
+  description: string;
+  bloomsLevel: string;
+  poMapping: string[];
+}
+
+export interface CurriculumActivity {
+  id: string;
+  title: string;
+  type: string;
+  duration: string;
+  coIds: string[];
+}
+
+export interface CurriculumTopic {
+  id: string;
+  title: string;
+  duration: string;
+  type: string;
+  activities: CurriculumActivity[];
+}
+
+export interface CurriculumModule {
+  id: string;
+  title: string;
+  order: number;
+  coIds: string[];
+  topics: CurriculumTopic[];
+}
+
+export interface CurriculumCourse {
+  id: string;
+  name: string;
+  code: string;
+  credits: number;
+  semester: number;
+  type: string;
+  description: string;
+  outcomes: CourseOutcome[];
+  modules: CurriculumModule[];
+  programmeId: string;
+  programmeName: string;
+}
+
 export type ListCoursesParams = {
 status?: string;
 search?: string;

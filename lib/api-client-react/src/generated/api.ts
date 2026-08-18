@@ -28,12 +28,17 @@ import type {
   Course,
   CourseDetail,
   CourseInput,
+  CourseOutcome,
+  CourseOutcomeInput,
+  CurriculumCourse,
   Dashboard,
   Error,
   HealthStatus,
   ImportResult,
   ListAssignmentsParams,
   ListCoursesParams,
+  Programme,
+  ProgrammeCourse,
   Session,
   User,
   UserImportInput
@@ -992,6 +997,309 @@ export function useListUsers<TData = Awaited<ReturnType<typeof listUsers>>, TErr
 
 
 
+
+export const getListProgrammesUrl = () => {
+
+
+
+
+  return `/api/curriculum/programmes`
+}
+
+/**
+ * @summary List academic programmes
+ */
+export const listProgrammes = async ( options?: Parameters<typeof customFetch>[1]): Promise<Programme[]> => {
+
+  return customFetch<Programme[]>(getListProgrammesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListProgrammesQueryKey = () => {
+    return [
+    `/api/curriculum/programmes`
+    ] as const;
+    }
+
+
+export const getListProgrammesQueryOptions = <TData = Awaited<ReturnType<typeof listProgrammes>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listProgrammes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListProgrammesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listProgrammes>>> = ({ signal }) => listProgrammes({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listProgrammes>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListProgrammesQueryResult = NonNullable<Awaited<ReturnType<typeof listProgrammes>>>
+export type ListProgrammesQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List academic programmes
+ */
+
+export function useListProgrammes<TData = Awaited<ReturnType<typeof listProgrammes>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listProgrammes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListProgrammesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getListProgrammeCoursesUrl = (programmeId: string,) => {
+
+
+
+
+  return `/api/curriculum/programmes/${programmeId}/courses`
+}
+
+/**
+ * @summary List courses within a programme
+ */
+export const listProgrammeCourses = async (programmeId: string, options?: Parameters<typeof customFetch>[1]): Promise<ProgrammeCourse[]> => {
+
+  return customFetch<ProgrammeCourse[]>(getListProgrammeCoursesUrl(programmeId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListProgrammeCoursesQueryKey = (programmeId: string,) => {
+    return [
+    `/api/curriculum/programmes/${programmeId}/courses`
+    ] as const;
+    }
+
+
+export const getListProgrammeCoursesQueryOptions = <TData = Awaited<ReturnType<typeof listProgrammeCourses>>, TError = ErrorType<Error>>(programmeId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listProgrammeCourses>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListProgrammeCoursesQueryKey(programmeId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listProgrammeCourses>>> = ({ signal }) => listProgrammeCourses(programmeId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: programmeId !== null && programmeId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listProgrammeCourses>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListProgrammeCoursesQueryResult = NonNullable<Awaited<ReturnType<typeof listProgrammeCourses>>>
+export type ListProgrammeCoursesQueryError = ErrorType<Error>
+
+
+/**
+ * @summary List courses within a programme
+ */
+
+export function useListProgrammeCourses<TData = Awaited<ReturnType<typeof listProgrammeCourses>>, TError = ErrorType<Error>>(
+ programmeId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listProgrammeCourses>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListProgrammeCoursesQueryOptions(programmeId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetCurriculumCourseOutlineUrl = (courseId: string,) => {
+
+
+
+
+  return `/api/curriculum/courses/${courseId}/outline`
+}
+
+/**
+ * @summary Get full course curriculum outline with COs and modules
+ */
+export const getCurriculumCourseOutline = async (courseId: string, options?: Parameters<typeof customFetch>[1]): Promise<CurriculumCourse> => {
+
+  return customFetch<CurriculumCourse>(getGetCurriculumCourseOutlineUrl(courseId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCurriculumCourseOutlineQueryKey = (courseId: string,) => {
+    return [
+    `/api/curriculum/courses/${courseId}/outline`
+    ] as const;
+    }
+
+
+export const getGetCurriculumCourseOutlineQueryOptions = <TData = Awaited<ReturnType<typeof getCurriculumCourseOutline>>, TError = ErrorType<Error>>(courseId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurriculumCourseOutline>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCurriculumCourseOutlineQueryKey(courseId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCurriculumCourseOutline>>> = ({ signal }) => getCurriculumCourseOutline(courseId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: courseId !== null && courseId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCurriculumCourseOutline>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCurriculumCourseOutlineQueryResult = NonNullable<Awaited<ReturnType<typeof getCurriculumCourseOutline>>>
+export type GetCurriculumCourseOutlineQueryError = ErrorType<Error>
+
+
+/**
+ * @summary Get full course curriculum outline with COs and modules
+ */
+
+export function useGetCurriculumCourseOutline<TData = Awaited<ReturnType<typeof getCurriculumCourseOutline>>, TError = ErrorType<Error>>(
+ courseId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurriculumCourseOutline>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCurriculumCourseOutlineQueryOptions(courseId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getAddCourseOutcomeUrl = (courseId: string,) => {
+
+
+
+
+  return `/api/curriculum/courses/${courseId}/outcomes`
+}
+
+/**
+ * @summary Add a course outcome
+ */
+export const addCourseOutcome = async (courseId: string,
+    courseOutcomeInput: CourseOutcomeInput, options?: Parameters<typeof customFetch>[1]): Promise<CourseOutcome> => {
+
+  return customFetch<CourseOutcome>(getAddCourseOutcomeUrl(courseId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(courseOutcomeInput)
+  }
+);}
+
+
+
+
+
+export const getAddCourseOutcomeMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addCourseOutcome>>, TError,{courseId: string;data: BodyType<CourseOutcomeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof addCourseOutcome>>, TError,{courseId: string;data: BodyType<CourseOutcomeInput>}, TContext> => {
+
+const mutationKey = ['addCourseOutcome'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof addCourseOutcome>>, {courseId: string;data: BodyType<CourseOutcomeInput>}> = (props) => {
+          const {courseId,data} = props ?? {};
+
+          return  addCourseOutcome(courseId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AddCourseOutcomeMutationResult = NonNullable<Awaited<ReturnType<typeof addCourseOutcome>>>
+    export type AddCourseOutcomeMutationBody = BodyType<CourseOutcomeInput>
+    export type AddCourseOutcomeMutationError = ErrorType<Error>
+
+    /**
+ * @summary Add a course outcome
+ */
+export const useAddCourseOutcome = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addCourseOutcome>>, TError,{courseId: string;data: BodyType<CourseOutcomeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof addCourseOutcome>>,
+        TError,
+        {courseId: string;data: BodyType<CourseOutcomeInput>},
+        TContext
+      > => {
+      return useMutation(getAddCourseOutcomeMutationOptions(options));
+    }
 
 export const getImportUsersUrl = () => {
 
