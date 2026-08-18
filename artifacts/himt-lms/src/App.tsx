@@ -724,9 +724,9 @@ function CurriculumCoursesPage() {
                 </div>
 
                 {/* Course Structure */}
-                <a href={`${TB_BASE}/reviewer/topics?cat=${course.tribyteTid}&catspec=true`} target="_blank" rel="noopener noreferrer" className={btn}>
+                <button onClick={() => navigate(`/curriculum/courses/${course.id}/structure`)} className={btn}>
                   <Layers size={12}/> Course Structure
-                </a>
+                </button>
 
                 {/* DASH Actions dropdown */}
                 <div className="relative">
@@ -871,6 +871,242 @@ function CurriculumCoursesPage() {
             <iframe src={iframeModal.url} className="flex-1 w-full rounded-b-2xl border-0" title={iframeModal.title}/>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CourseStructurePage — internal topics view for a curriculum course ──────
+
+type CourseTopic = {
+  id: string; courseId: string; nid: string; tid: string;
+  name: string; order: number; thumbUrl: string; faculty: string;
+  subtopics: Array<{ id: string; topicId: string; courseId: string; nid: string; name: string; order: number }>;
+};
+
+function CourseStructurePage() {
+  const { id = '' } = useParams<{ id: string }>();
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+
+  // Course info
+  const [course, setCourse] = useState<{ id: string; name: string; tribyteTid: string } | null>(null);
+  // Topics
+  const [topics, setTopics] = useState<CourseTopic[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  // UI state
+  const [addOpen, setAddOpen] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [addThumb, setAddThumb] = useState('');
+  const [editTopic, setEditTopic] = useState<CourseTopic | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editThumb, setEditThumb] = useState('');
+  const [facultyTopic, setFacultyTopic] = useState<CourseTopic | null>(null);
+  const [facultyVal, setFacultyVal] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  async function loadTopics() {
+    setLoading(true); setError('');
+    try {
+      const [t, c] = await Promise.all([
+        apiFetch<CourseTopic[]>(`/curriculum/courses/${id}/topics`),
+        apiFetch<{ id: string; name: string; tribyteTid: string }[]>('/curriculum/list'),
+      ]);
+      setTopics(t);
+      const found = c.find(x => x.id === id) ?? null;
+      setCourse(found);
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); }
+  }
+
+  useEffect(() => { if (id) loadTopics(); }, [id]);
+
+  async function handleAddTopic(e: FormEvent) {
+    e.preventDefault();
+    if (!addName.trim()) return;
+    await apiFetch(`/curriculum/courses/${id}/topics`, 'POST', { name: addName.trim(), thumbUrl: addThumb.trim() });
+    setAddOpen(false); setAddName(''); setAddThumb('');
+    loadTopics();
+    toast({ title: 'Topic added' });
+  }
+
+  async function handleEditSave(e: FormEvent) {
+    e.preventDefault();
+    if (!editTopic) return;
+    await apiFetch(`/curriculum/topics/${editTopic.id}`, 'PATCH', { name: editName, thumbUrl: editThumb });
+    setEditTopic(null);
+    loadTopics();
+    toast({ title: 'Topic updated' });
+  }
+
+  async function handleDelete(topicId: string, name: string) {
+    if (!confirm(`Delete topic "${name}"? This cannot be undone.`)) return;
+    await apiFetch(`/curriculum/topics/${topicId}`, 'DELETE');
+    loadTopics();
+    toast({ title: 'Topic deleted' });
+  }
+
+  async function handleSetFaculty(e: FormEvent) {
+    e.preventDefault();
+    if (!facultyTopic) return;
+    await apiFetch(`/curriculum/topics/${facultyTopic.id}`, 'PATCH', { faculty: facultyVal });
+    setFacultyTopic(null);
+    loadTopics();
+    toast({ title: 'Faculty assigned' });
+  }
+
+  async function handleImport() {
+    setImporting(true);
+    try {
+      const result = await apiFetch<{ imported: number; message?: string }>(`/curriculum/courses/${id}/topics/import`, 'POST');
+      loadTopics();
+      toast({ title: `Imported ${result.imported} topic${result.imported !== 1 ? 's' : ''}`, description: result.message ?? '' });
+    } catch (e) {
+      toast({ title: 'Import failed', description: String(e) });
+    } finally { setImporting(false); }
+  }
+
+  const btn = "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors whitespace-nowrap";
+  const inp = "rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 w-full";
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+
+        {/* Back nav + toolbar */}
+        <div className="flex items-center justify-between">
+          <button onClick={() => navigate('/curriculum/courses')} className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+            <ChevronLeft size={18} /> {course?.name ?? 'Course'}
+          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setAddOpen(true)} className={btn}><Plus size={13}/> Add Topic</button>
+            <button onClick={handleImport} disabled={importing} className={cx(btn, importing && 'opacity-50 cursor-not-allowed')}>
+              <RefreshCw size={13} className={importing ? 'animate-spin' : ''}/> Import from TriByte
+            </button>
+          </div>
+        </div>
+
+        {/* Page heading */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-6">
+          <div className="flex items-center gap-3 mb-1">
+            <Layers size={20} className="text-primary"/>
+            <h1 className="text-xl font-bold text-gray-800">Course Structure</h1>
+          </div>
+          <p className="text-sm text-gray-500 ml-8">{course?.name ?? ''} · {topics.length} topic{topics.length !== 1 ? 's' : ''}</p>
+        </div>
+
+        {/* Content */}
+        {loading && <div className="py-16 text-center text-sm text-gray-400">Loading topics…</div>}
+        {error && <div className="rounded-xl bg-red-50 border border-red-100 p-5 text-sm text-red-600">{error} <button onClick={loadTopics} className="ml-3 underline">Retry</button></div>}
+
+        {!loading && !error && topics.length === 0 && (
+          <div className="flex flex-col items-center justify-center rounded-xl bg-white border border-dashed border-gray-200 py-20 text-center">
+            <Layers size={36} className="mb-4 text-gray-300"/>
+            <p className="text-base font-semibold text-gray-500">No topics yet</p>
+            <p className="mt-1 text-sm text-gray-400 max-w-xs">Add a topic manually or click "Import from TriByte" to pull the course structure automatically.</p>
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setAddOpen(true)} className={btn}><Plus size={13}/> Add Topic</button>
+              <button onClick={handleImport} disabled={importing} className={btn}><RefreshCw size={13}/> Import from TriByte</button>
+            </div>
+          </div>
+        )}
+
+        {!loading && !error && topics.length > 0 && (
+          <div className="space-y-3">
+            {topics.map((topic, idx) => (
+              <div key={topic.id} className="rounded-xl bg-white border border-gray-100 shadow-xs overflow-hidden">
+                <div className="flex items-center gap-4 p-4">
+                  {/* Thumbnail */}
+                  <div className="shrink-0 h-16 w-20 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
+                    {topic.thumbUrl
+                      ? <img src={topic.thumbUrl} alt={topic.name} className="h-full w-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }}/>
+                      : <BookOpen size={24} className="text-gray-300"/>}
+                  </div>
+
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-800 leading-snug">{idx + 1}. {topic.name}</p>
+                    {topic.faculty && <p className="mt-0.5 text-xs text-gray-400">Faculty: <span className="text-gray-600">{topic.faculty}</span></p>}
+                    {topic.subtopics.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {topic.subtopics.map(s => (
+                          <span key={s.id} className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{s.name}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="shrink-0 flex items-center gap-2">
+                    <button onClick={() => { setEditTopic(topic); setEditName(topic.name); setEditThumb(topic.thumbUrl); }} className={btn}>
+                      <Pencil size={12}/> Edit
+                    </button>
+                    <button onClick={() => handleDelete(topic.id, topic.name)} className={cx(btn, 'text-red-500 border-red-100 hover:bg-red-50 hover:text-red-700')}>
+                      <Trash2 size={12}/> Delete
+                    </button>
+                    <button onClick={() => { setFacultyTopic(topic); setFacultyVal(topic.faculty ?? ''); }} className={btn}>
+                      <Users size={12}/> Set Faculty
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add Topic modal */}
+      {addOpen && (
+        <Modal title="Add Topic" onClose={() => setAddOpen(false)}>
+          <form onSubmit={handleAddTopic} className="space-y-4">
+            <Field label="Topic name">
+              <input required autoFocus value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. Introduction to Navigation" className={cx(inp, 'form-input')}/>
+            </Field>
+            <Field label="Thumbnail URL (optional)">
+              <input value={addThumb} onChange={e => setAddThumb(e.target.value)} placeholder="https://..." className={cx(inp, 'form-input')}/>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="btn-cancel-add-topic" variant="quiet" onClick={() => setAddOpen(false)}>Cancel</Button>
+              <Button testId="btn-save-add-topic" type="submit">Add Topic</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Edit Topic modal */}
+      {editTopic && (
+        <Modal title="Edit Topic" onClose={() => setEditTopic(null)}>
+          <form onSubmit={handleEditSave} className="space-y-4">
+            <Field label="Topic name">
+              <input required autoFocus value={editName} onChange={e => setEditName(e.target.value)} className={cx(inp, 'form-input')}/>
+            </Field>
+            <Field label="Thumbnail URL">
+              <input value={editThumb} onChange={e => setEditThumb(e.target.value)} placeholder="https://..." className={cx(inp, 'form-input')}/>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="btn-cancel-edit-topic" variant="quiet" onClick={() => setEditTopic(null)}>Cancel</Button>
+              <Button testId="btn-save-edit-topic" type="submit">Save</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Set Faculty modal */}
+      {facultyTopic && (
+        <Modal title="Set Faculty" onClose={() => setFacultyTopic(null)}>
+          <form onSubmit={handleSetFaculty} className="space-y-4">
+            <p className="text-sm text-gray-500">Assign faculty for: <span className="font-semibold text-gray-700">{facultyTopic.name}</span></p>
+            <Field label="Faculty name">
+              <input autoFocus value={facultyVal} onChange={e => setFacultyVal(e.target.value)} placeholder="e.g. Capt. James Smith" className={cx(inp, 'form-input')}/>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="btn-cancel-faculty" variant="quiet" onClick={() => setFacultyTopic(null)}>Cancel</Button>
+              <Button testId="btn-save-faculty" type="submit">Assign</Button>
+            </div>
+          </form>
+        </Modal>
       )}
     </div>
   );
@@ -2191,7 +2427,7 @@ function CurriculumOthersPage() {
   );
 }
 
-function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppRouter /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
 export default App;

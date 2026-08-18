@@ -12,6 +12,8 @@ import {
   programmeCourses as programmeCoursesTable,
   courseOutlines as courseOutlinesTable,
   curriculumCourses as curriculumCoursesTable,
+  courseTopics as courseTopicsTable,
+  courseSubtopics as courseSubtopicsTable,
   groups as groupsTable,
   tags as tagsTable,
   glossaryTerms as glossaryTable,
@@ -754,6 +756,233 @@ router.delete("/curriculum/faq-categories/:id", async (req, res) => {
   try {
     await db.delete(faqTable).where(eq(faqTable.id, req.params.id));
     res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// ─── Course Topics (curriculum) ───────────────────────────────────────────────
+
+// List topics for a curriculum course
+router.get("/curriculum/courses/:id/topics", async (req, res) => {
+  try {
+    const topics = await db.select().from(courseTopicsTable)
+      .where(eq(courseTopicsTable.courseId, req.params.id));
+    // sort by order
+    topics.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const subtopics = await db.select().from(courseSubtopicsTable)
+      .where(eq(courseSubtopicsTable.courseId, req.params.id));
+    const result = topics.map(t => ({
+      ...t,
+      subtopics: subtopics.filter(s => s.topicId === t.id).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    }));
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// Create a topic for a curriculum course
+router.post("/curriculum/courses/:id/topics", async (req, res) => {
+  const { name, thumbUrl, nid, tid, faculty } = req.body as Record<string, string>;
+  if (!name) { res.status(400).json({ error: "name is required" }); return; }
+  try {
+    const existing = await db.select().from(courseTopicsTable)
+      .where(eq(courseTopicsTable.courseId, req.params.id));
+    const row = {
+      id: `ct-${Date.now()}`,
+      courseId: req.params.id,
+      name,
+      nid: nid ?? "",
+      tid: tid ?? "",
+      thumbUrl: thumbUrl ?? "",
+      faculty: faculty ?? "",
+      order: existing.length,
+    };
+    await db.insert(courseTopicsTable).values(row);
+    res.status(201).json(row);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// Update a topic
+router.patch("/curriculum/topics/:topicId", async (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  try {
+    const updates: Record<string, unknown> = {};
+    if (body.name     !== undefined) updates.name     = body.name;
+    if (body.thumbUrl !== undefined) updates.thumbUrl = body.thumbUrl;
+    if (body.faculty  !== undefined) updates.faculty  = body.faculty;
+    if (body.order    !== undefined) updates.order    = body.order;
+    await db.update(courseTopicsTable).set(updates).where(eq(courseTopicsTable.id, req.params.topicId));
+    const [updated] = await db.select().from(courseTopicsTable).where(eq(courseTopicsTable.id, req.params.topicId));
+    res.json(updated ?? { ok: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// Delete a topic (and its subtopics)
+router.delete("/curriculum/topics/:topicId", async (req, res) => {
+  try {
+    await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, req.params.topicId));
+    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.id, req.params.topicId));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// ── Helpers for parsing TriByte topics HTML ───────────────────────────────────
+
+/** Walk forward from `startPos` (just inside the opening `<li>` tag) and
+ *  return the index of the matching `</li>`, correctly handling nested `<li>`. */
+function findLiBlockEnd(html: string, startPos: number): number {
+  let depth = 1;
+  let i = startPos;
+  while (i < html.length) {
+    if (html[i] === '<') {
+      if (html.slice(i, i + 3) === '<li' && (html[i + 3] === ' ' || html[i + 3] === '>')) {
+        depth++; i += 3;
+      } else if (html.slice(i, i + 5) === '</li>') {
+        depth--; if (depth === 0) return i; i += 5;
+      } else { i++; }
+    } else { i++; }
+  }
+  return html.length;
+}
+
+const cleanHtml = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** Extract the best human-readable label from an inner <li> HTML block. */
+function extractTopicName(innerHtml: string, fallbackNid: string): string {
+  const patterns = [
+    /class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/(?:span|div|p|h\d)>/,
+    /class="[^"]*node-title[^"]*"[^>]*>([\s\S]*?)<\/(?:span|div|p|h\d|a)>/,
+    /class="[^"]*\bname\b[^"]*"[^>]*>([\s\S]*?)<\/(?:span|div|p)>/,
+    /<a[^>]*>([\s\S]*?)<\/a>/,
+  ];
+  for (const p of patterns) {
+    const m = innerHtml.match(p);
+    if (m) { const t = cleanHtml(m[1]); if (t) return t; }
+  }
+  const text = cleanHtml(innerHtml).slice(0, 150);
+  return text || `Topic ${fallbackNid}`;
+}
+
+/** Extract the first CDN image URL from an inner <li> HTML block. */
+function extractTopicThumb(innerHtml: string): string {
+  const m = innerHtml.match(/src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|gif|webp)[^"]*)"/i)
+    || innerHtml.match(/src="([^"]*static[^"]+)"/i)
+    || innerHtml.match(/src="([^"]+)"/);
+  return m?.[1] ?? '';
+}
+
+// Import topics (and sub-topics) from TriByte for a curriculum course.
+// Scrapes /reviewer/topics?cat={tid}&catspec=true, parses the carousel HTML,
+// and stores both top-level topics and any nested subtopics.
+router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
+  try {
+    const [course] = await db.select().from(curriculumCoursesTable)
+      .where(eq(curriculumCoursesTable.id, req.params.id));
+    if (!course) { res.status(404).json({ error: "Course not found" }); return; }
+    if (!course.tribyteTid) { res.status(400).json({ error: "Course has no TriByte TID — cannot import" }); return; }
+
+    const sessionCookie = process.env.TRIBYTE_SESSION;
+    if (!sessionCookie) {
+      res.status(400).json({ error: "TRIBYTE_SESSION env var not set — cannot scrape TriByte" });
+      return;
+    }
+
+    const url = `https://admin.learn.himtelearning.com/reviewer/topics?cat=${course.tribyteTid}&catspec=true`;
+    const htmlRes = await fetch(url, { headers: { Cookie: sessionCookie, "User-Agent": "Mozilla/5.0" } });
+    if (!htmlRes.ok) { res.status(502).json({ error: `TriByte responded ${htmlRes.status}` }); return; }
+    const html = await htmlRes.text();
+
+    // ── Step 1: Collect all <li data-nid="NID"> positions and their inner HTML ──
+    interface LiNidItem {
+      pos: number; nid: string; innerStart: number;
+      depth: number; innerHtml: string;
+    }
+    const nidItems: LiNidItem[] = [];
+    const liTagRe = /<li([^>]*)>/g;
+    let m: RegExpExecArray | null;
+    while ((m = liTagRe.exec(html)) !== null) {
+      const nidMatch = m[1].match(/\bdata-nid="(\d+)"/);
+      if (nidMatch) {
+        const innerStart = m.index + m[0].length;
+        nidItems.push({ pos: m.index, nid: nidMatch[1], innerStart, depth: 0, innerHtml: '' });
+      }
+    }
+
+    // ── Step 2: Compute nesting depth by counting opens/closes before each item ──
+    for (const item of nidItems) {
+      const before = html.slice(0, item.pos);
+      const opens  = (before.match(/<li[\s>]/g) || []).length;
+      const closes = (before.match(/<\/li>/g)   || []).length;
+      item.depth = opens - closes;
+    }
+
+    // ── Step 3: Capture each item's inner HTML (handles nested <li> correctly) ──
+    for (const item of nidItems) {
+      const endPos = findLiBlockEnd(html, item.innerStart);
+      item.innerHtml = html.slice(item.innerStart, endPos);
+    }
+
+    if (nidItems.length === 0) {
+      res.status(200).json({ imported: 0, subtopicsImported: 0, topics: [], message: "No topics found on TriByte page" });
+      return;
+    }
+
+    // ── Step 4: Split into topics (minimum depth) and subtopics (deeper) ──
+    const minDepth   = Math.min(...nidItems.map(i => i.depth));
+    const topicItems = nidItems.filter(i => i.depth === minDepth);
+    const subItems   = nidItems.filter(i => i.depth >  minDepth);
+
+    // ── Step 5: Clear existing data ──
+    const existingTopics = await db.select().from(courseTopicsTable)
+      .where(eq(courseTopicsTable.courseId, req.params.id));
+    for (const t of existingTopics) {
+      await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, t.id));
+    }
+    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.courseId, req.params.id));
+
+    // ── Step 6: Insert topics ──
+    const topicRows = topicItems.map((t, i) => ({
+      id:       `ct-${course.tribyteTid}-${t.nid}`,
+      courseId: req.params.id,
+      nid:      t.nid,
+      tid:      course.tribyteTid ?? "",
+      name:     extractTopicName(t.innerHtml, t.nid),
+      order:    i,
+      thumbUrl: extractTopicThumb(t.innerHtml),
+      faculty:  "",
+    }));
+    if (topicRows.length) await db.insert(courseTopicsTable).values(topicRows);
+
+    // ── Step 7: Insert subtopics — each under the nearest preceding topic ──
+    let subtopicsInserted = 0;
+    // track per-topic subtopic order
+    const subOrderByTopic: Record<string, number> = {};
+
+    for (const sub of subItems) {
+      // nearest preceding topic in document order
+      const parentTopic = [...topicItems].reverse().find(t => t.pos < sub.pos);
+      if (!parentTopic) continue;
+      const topicRow = topicRows.find(r => r.nid === parentTopic.nid);
+      if (!topicRow) continue;
+
+      const topicId = topicRow.id;
+      const subOrder = subOrderByTopic[topicId] ?? 0;
+      subOrderByTopic[topicId] = subOrder + 1;
+
+      await db.insert(courseSubtopicsTable).values({
+        id:       `cs-${course.tribyteTid}-${sub.nid}`,
+        topicId,
+        courseId: req.params.id,
+        nid:      sub.nid,
+        name:     extractTopicName(sub.innerHtml, sub.nid),
+        order:    subOrder,
+      }).onConflictDoNothing();
+      subtopicsInserted++;
+    }
+
+    res.status(201).json({
+      imported: topicRows.length,
+      subtopicsImported: subtopicsInserted,
+      topics: topicRows,
+    });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 

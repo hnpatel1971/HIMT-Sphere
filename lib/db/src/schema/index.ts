@@ -172,6 +172,30 @@ export const courseOutlines = pgTable("course_outlines", {
   createdAt:         timestamp("created_at").defaultNow().notNull(),
 });
 
+// ─── Course topics & sub-topics (curriculum) ─────────────────────────────────
+
+export const courseTopics = pgTable("course_topics", {
+  id:        text("id").primaryKey(),
+  courseId:  text("course_id").notNull(),   // curriculum_courses.id
+  nid:       text("nid").default(""),       // TriByte topic node ID
+  tid:       text("tid").default(""),       // TriByte topic taxonomy ID
+  name:      text("name").notNull(),
+  order:     integer("order").default(0),
+  thumbUrl:  text("thumb_url").default(""),
+  faculty:   text("faculty").default(""),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const courseSubtopics = pgTable("course_subtopics", {
+  id:       text("id").primaryKey(),
+  topicId:  text("topic_id").notNull(),     // course_topics.id
+  courseId: text("course_id").notNull(),    // denorm for fast query
+  nid:      text("nid").default(""),
+  name:     text("name").notNull(),
+  order:    integer("order").default(0),
+  createdAt:timestamp("created_at").defaultNow().notNull(),
+});
+
 // ─── Inferred types (used by API routes) ─────────────────────────────────────
 
 export type Group             = typeof groups.$inferSelect;
@@ -218,3 +242,9 @@ export type InsertProgrammeCourse = typeof programmeCourses.$inferInsert;
 
 export type CourseOutline     = typeof courseOutlines.$inferSelect;
 export type InsertCourseOutline = typeof courseOutlines.$inferInsert;
+
+export type CourseTopic       = typeof courseTopics.$inferSelect;
+export type InsertCourseTopic = typeof courseTopics.$inferInsert;
+
+export type CourseSubtopic       = typeof courseSubtopics.$inferSelect;
+export type InsertCourseSubtopic = typeof courseSubtopics.$inferInsert;
