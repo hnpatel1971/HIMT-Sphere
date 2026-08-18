@@ -806,8 +806,8 @@ router.post("/curriculum/courses/:id/topics", async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-// Update a topic
-router.patch("/curriculum/topics/:topicId", async (req, res) => {
+// Update a topic (admin only)
+router.patch("/curriculum/topics/:topicId", requireAdmin, async (req, res) => {
   const body = req.body as Record<string, unknown>;
   try {
     const updates: Record<string, unknown> = {};
@@ -821,8 +821,8 @@ router.patch("/curriculum/topics/:topicId", async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-// Delete a topic (and its subtopics)
-router.delete("/curriculum/topics/:topicId", async (req, res) => {
+// Delete a topic (and its subtopics) (admin only)
+router.delete("/curriculum/topics/:topicId", requireAdmin, async (req, res) => {
   try {
     await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, req.params.topicId));
     await db.delete(courseTopicsTable).where(eq(courseTopicsTable.id, req.params.topicId));

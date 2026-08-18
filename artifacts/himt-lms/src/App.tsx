@@ -28,7 +28,7 @@ import { Link, Route, Router as WouterRouter, Switch, useLocation, useParams } f
 import {
   Activity, Archive, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, Eye, FileSearch, FileUp, Filter, GraduationCap,
-  Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
+  GripVertical, Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
   Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
 } from 'lucide-react';
@@ -1255,6 +1255,11 @@ function CourseStructurePage() {
   const [facultyVal, setFacultyVal] = useState('');
   const [importing, setImporting] = useState(false);
 
+  // Drag-and-drop state for topic reordering
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   // UI state — subtopics
   const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
   const [addSubTopic, setAddSubTopic] = useState<CourseTopic | null>(null);
@@ -1375,6 +1380,53 @@ function CourseStructurePage() {
     });
   }
 
+  function handleDragStart(id: string) {
+    setDraggedId(id);
+  }
+
+  function handleDragOver(e: React.DragEvent, id: string) {
+    e.preventDefault();
+    if (id === draggedId) return;
+    setDragOverId(id);
+    setTopics(prev => {
+      const from = prev.findIndex(t => t.id === draggedId);
+      const to   = prev.findIndex(t => t.id === id);
+      if (from === -1 || to === -1 || from === to) return prev;
+      const next = [...prev];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
+  }
+
+  async function handleDrop() {
+    setDraggedId(null);
+    setDragOverId(null);
+    if (!isAdmin) {
+      setPendingAction(() => () => {});
+      setShowLogin(true);
+      loadTopics(); // restore original order
+      return;
+    }
+    setSaving(true);
+    try {
+      await Promise.all(
+        topics.map((t, idx) => apiFetch(`/curriculum/topics/${t.id}`, 'PATCH', { order: idx }))
+      );
+      toast({ title: 'Topic order saved' });
+    } catch (e) {
+      toast({ title: 'Failed to save order', description: String(e), variant: 'destructive' });
+      loadTopics(); // restore from server on failure
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleDragEnd() {
+    setDraggedId(null);
+    setDragOverId(null);
+  }
+
   async function handleAddSubtopic(e: FormEvent) {
     e.preventDefault();
     if (!addSubTopic || !addSubName.trim()) return;
@@ -1453,12 +1505,37 @@ function CourseStructurePage() {
 
         {!loading && !error && topics.length > 0 && (
           <div className="space-y-3">
+            {saving && <p className="text-xs text-gray-400 text-center">Saving order…</p>}
             {topics.map((topic, idx) => {
               const isExpanded = expandedTopics.has(topic.id);
+              const isDragging = draggedId === topic.id;
+              const isDragOver = dragOverId === topic.id;
               return (
-                <div key={topic.id} className="rounded-xl bg-white border border-gray-100 shadow-xs overflow-hidden">
+                <div
+                  key={topic.id}
+                  draggable={!!isAdmin}
+                  onDragStart={() => isAdmin && handleDragStart(topic.id)}
+                  onDragOver={e => isAdmin && handleDragOver(e, topic.id)}
+                  onDrop={() => isAdmin && handleDrop()}
+                  onDragEnd={handleDragEnd}
+                  className={cx(
+                    'rounded-xl bg-white border shadow-xs overflow-hidden transition-all',
+                    isDragging ? 'opacity-40 border-primary/30' : 'border-gray-100',
+                    isDragOver && !isDragging ? 'ring-2 ring-primary/40 border-primary/20' : '',
+                  )}
+                >
                   {/* Topic row */}
                   <div className="flex items-center gap-4 p-4">
+                    {/* Drag handle — admin only */}
+                    {isAdmin && (
+                      <div
+                        className="shrink-0 cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition-colors"
+                        title="Drag to reorder"
+                      >
+                        <GripVertical size={18}/>
+                      </div>
+                    )}
+
                     {/* Thumbnail */}
                     <div className="shrink-0 h-16 w-20 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
                       {topic.thumbUrl
