@@ -327,7 +327,257 @@ function CertificateCard({ certificate, index }: { certificate: Certificate; ind
 
 function AnalyticsPage() { const query = useGetAnalyticsOverview({ query: { queryKey: getGetAnalyticsOverviewQueryKey() } }); const data = query.data as AnalyticsOverview | undefined; if (query.isLoading) return <LoadingPanel />; if (query.isError || !data) return <ErrorPanel onRetry={() => query.refetch()} />; const maxWeekly = Math.max(...data.weeklyActivity.map((item) => item.value), 1); return <div><PageHeading eyebrow="Operations intelligence" title="Analytics" description="A measured view of learner momentum, course performance and the work still to review." action={<Button testId="button-export-analytics" variant="outline"><Download size={16} /> Export report</Button>} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Active learners" value={data.activeLearners} hint="Across all programmes" icon={Users} /><MetricCard label="Completion rate" value={`${data.completionRate}%`} hint="All active courses" icon={TrendingUp} /><MetricCard label="Average progress" value={`${data.averageProgress}%`} hint="Current cohort" icon={Activity} /><MetricCard label="Pending reviews" value={data.pendingReviews} hint="Faculty queue" icon={ClipboardCheck} /></div><div className="mt-7 grid gap-7 xl:grid-cols-[1.25fr_1fr]"><section className="rounded-xl border border-border bg-card shadow-xs p-6"><SectionTitle title="Weekly activity" meta="Last 7 weeks" /><div className="mt-8 flex h-64 items-end gap-2 sm:gap-4">{data.weeklyActivity.map((point) => <div key={point.label} className="group flex flex-1 flex-col items-center gap-2"><div className="relative flex h-52 w-full items-end"><div className="w-full rounded-t-sm bg-primary transition-all duration-500 group-hover:bg-primary/80" style={{ height: `${Math.max(5, point.value / maxWeekly * 100)}%` }} /></div><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{point.label}</span></div>)}</div></section><section className="rounded-xl border border-border bg-card shadow-xs p-6"><SectionTitle title="Course performance" meta="Completion by route" /><div className="mt-6 space-y-5">{data.coursePerformance.map((point, index) => <div key={point.label}><div className="mb-2 flex justify-between gap-3 text-xs"><span className="truncate font-semibold">{point.label}</span><span className="font-semibold text-muted-foreground">{point.value}%</span></div><ProgressBar value={point.value} accent={index % 2 ? 'bg-[hsl(168_91%_25%)]' : 'bg-primary'} /></div>)}</div></section></div></div>; }
 
-function UsersPage() { const query = useListUsers({ query: { queryKey: getListUsersQueryKey() } }); const importUsers = useImportUsers(); const [search, setSearch] = useState(''); const [open, setOpen] = useState(false); const [notice, setNotice] = useState(''); const users = ((query.data as User[] | undefined) ?? []).filter((user) => `${user.name} ${user.email} ${user.role}`.toLowerCase().includes(search.toLowerCase())); const submitImport = () => { importUsers.mutate({ data: { filename: 'himt-learners.csv', rows: 24 } }, { onSuccess: (result) => { setNotice(`${result.valid} records ready · ${result.warnings} warnings`); setOpen(false); queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() }); } }); }; return <div><PageHeading eyebrow="People & access" title="Users & roles" description="Keep learner, faculty and operations access aligned with the right programme group." action={<Button testId="button-import-users" onClick={() => setOpen(true)}><Upload size={16} /> Import users</Button>} />{notice && <div data-testid="status-import-result" className="mb-5 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/10 p-3 text-sm font-semibold text-primary"><Check size={16} /> {notice}<button data-testid="button-dismiss-import-result" onClick={() => setNotice('')} className="ml-auto"><X size={15} /></button></div>}<div className="mb-6 flex items-center gap-3 rounded-xl border border-border shadow-xs bg-card p-3"><Search size={17} className="ml-2 text-muted-foreground" /><input data-testid="input-search-users" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search people, email or role" className="h-10 flex-1 bg-transparent text-sm outline-none" /><span className="hidden rounded-lg bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground sm:block">{users.length} people</span></div>{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : users.length === 0 ? <EmptyPanel icon={Users} title="No users found" description="Try a different name or import a learner roster to get started." action={<Button testId="button-empty-import-users" onClick={() => setOpen(true)}><FileUp size={15} /> Import roster</Button>} /> : <div className="overflow-x-auto rounded-xl border border-border shadow-xs bg-card"><table className="w-full min-w-[720px] text-left"><thead><tr className="border-b border-border bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><th className="px-5 py-4">Person</th><th className="px-5 py-4">Role</th><th className="px-5 py-4">Group</th><th className="px-5 py-4">Status</th><th className="px-5 py-4">Last activity</th><th /></tr></thead><tbody className="divide-y divide-border">{users.map((user) => <tr key={user.id} data-testid={`row-user-${user.id}`} className="hover:bg-muted/30"><td className="px-5 py-4"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">{initials(user.name)}</span><div><p className="text-sm font-bold">{user.name}</p><p className="text-xs text-muted-foreground">{user.email}</p></div></div></td><td className="px-5 py-4"><Pill>{user.role}</Pill></td><td className="px-5 py-4 text-sm text-muted-foreground">{user.group}</td><td className="px-5 py-4"><Pill>{user.status}</Pill></td><td className="px-5 py-4 text-[11px] font-semibold text-muted-foreground">{niceDate(user.lastActivity)}</td><td className="px-5 py-4 text-right"><button data-testid={`button-user-more-${user.id}`} aria-label={`More actions for ${user.name}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button></td></tr>)}</tbody></table></div>}{open && <Modal title="Import user roster" onClose={() => setOpen(false)}><div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary"><FileUp size={22} /></span><h3 className="mt-4 text-lg font-bold">Drop your CSV roster here</h3><p className="mt-1 text-sm text-muted-foreground">The preview will flag missing emails and unknown groups before import.</p><Button testId="button-select-user-file" variant="outline" onClick={submitImport} disabled={importUsers.isPending} >{importUsers.isPending ? 'Importing…' : 'Choose CSV file'}</Button></div><div className="mt-4 flex justify-end"><Button testId="button-cancel-user-import" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button></div></Modal>}</div>; }
+function UsersPage() {
+  const query        = useListUsers({ query: { queryKey: getListUsersQueryKey() } });
+  const importUsers  = useImportUsers();
+  const { toast }    = useToast();
+
+  // ── Local state ────────────────────────────────────────────────────────────
+  const [search,       setSearch]       = useState('');
+  const [openImport,   setOpenImport]   = useState(false);
+  const [notice,       setNotice]       = useState('');
+  const [roleFilter,   setRoleFilter]   = useState('');
+
+  // Admin auth (same flow as CurriculumCoursesPage)
+  const [isAdmin,      setIsAdmin]      = useState<boolean | null>(null);
+  const [showLogin,    setShowLogin]    = useState(false);
+  const [loginUser,    setLoginUser]    = useState('');
+  const [loginPass,    setLoginPass]    = useState('');
+  const [loginBusy,    setLoginBusy]    = useState(false);
+  const [loginError,   setLoginError]   = useState('');
+  const [pendingSync,  setPendingSync]  = useState(false);
+
+  // Sync state
+  const [syncing, setSyncing] = useState(false);
+
+  // Check session on mount
+  useEffect(() => {
+    apiFetch<{ isAdmin: boolean }>('/auth/status')
+      .then(r => setIsAdmin(r.isAdmin))
+      .catch(() => setIsAdmin(false));
+  }, []);
+
+  const users = ((query.data as User[] | undefined) ?? []).filter(u => {
+    const text = `${u.name} ${u.email} ${u.role}`.toLowerCase();
+    if (search && !text.includes(search.toLowerCase())) return false;
+    if (roleFilter && u.role.toLowerCase() !== roleFilter.toLowerCase()) return false;
+    return true;
+  });
+
+  // ── Import (CSV stub) ──────────────────────────────────────────────────────
+  const submitImport = () => {
+    importUsers.mutate(
+      { data: { filename: 'himt-learners.csv', rows: 24 } },
+      { onSuccess: (result) => {
+          setNotice(`${result.valid} records ready · ${result.warnings} warnings`);
+          setOpenImport(false);
+          queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
+        },
+      },
+    );
+  };
+
+  // ── TriByte sync ───────────────────────────────────────────────────────────
+  async function runSync() {
+    setSyncing(true);
+    try {
+      const result = await apiFetch<{
+        usersAdded: number; usersUpdated: number; groupsImported: number;
+        totalUsers: number; usedStaticFallback: boolean;
+      }>('/users/sync-tribyte', 'POST');
+      await queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
+      const parts: string[] = [];
+      if (result.usersAdded   > 0) parts.push(`${result.usersAdded} users added`);
+      if (result.usersUpdated > 0) parts.push(`${result.usersUpdated} updated`);
+      if (result.groupsImported > 0) parts.push(`${result.groupsImported} new groups`);
+      if (parts.length === 0) parts.push('Already up to date');
+      toast({
+        title: 'Sync complete',
+        description: parts.join(' · ') + (result.usedStaticFallback ? ' (representative data — configure TriByte credentials for live sync)' : ''),
+      });
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes('401') || msg.includes('Unauthorized')) {
+        setIsAdmin(false); setShowLogin(true); setPendingSync(true);
+      } else {
+        toast({ title: 'Sync failed', description: msg, variant: 'destructive' });
+      }
+    } finally { setSyncing(false); }
+  }
+
+  function handleSyncTriByte() {
+    if (!isAdmin) { setShowLogin(true); setPendingSync(true); return; }
+    void runSync();
+  }
+
+  // ── Admin login submit ─────────────────────────────────────────────────────
+  async function handleAdminLogin(e: FormEvent) {
+    e.preventDefault();
+    setLoginBusy(true); setLoginError('');
+    try {
+      await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
+      setIsAdmin(true); setShowLogin(false); setLoginUser(''); setLoginPass('');
+      if (pendingSync) { setPendingSync(false); void runSync(); }
+    } catch (err) {
+      setLoginError(String(err).replace(/^Error:\s*/, ''));
+    } finally { setLoginBusy(false); }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  return (
+    <div>
+      <PageHeading
+        eyebrow="People & access"
+        title="Users & roles"
+        description="Keep learner, faculty and operations access aligned with the right programme group."
+        action={
+          <div className="flex items-center gap-2">
+            <Button testId="button-import-users" variant="outline" onClick={() => setOpenImport(true)}>
+              <Upload size={16} /> Import users
+            </Button>
+            <Button
+              testId="button-sync-users-tribyte"
+              variant="outline"
+              onClick={handleSyncTriByte}
+              disabled={syncing}
+            >
+              <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing…' : 'Sync from TriByte'}
+            </Button>
+          </div>
+        }
+      />
+
+      {notice && (
+        <div data-testid="status-import-result" className="mb-5 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/10 p-3 text-sm font-semibold text-primary">
+          <Check size={16} /> {notice}
+          <button data-testid="button-dismiss-import-result" onClick={() => setNotice('')} className="ml-auto"><X size={15} /></button>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row rounded-xl border border-border shadow-xs bg-card p-3">
+        <label className="relative flex flex-1 items-center">
+          <Search size={17} className="absolute left-3 text-muted-foreground" />
+          <input
+            data-testid="input-search-users"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search people, email or role"
+            className="h-10 w-full rounded-lg bg-muted/60 pl-10 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/30"
+          />
+        </label>
+        <label className="flex items-center gap-2 rounded-lg bg-muted/60 px-3">
+          <Filter size={15} className="text-muted-foreground" />
+          <select
+            data-testid="select-role-filter"
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            className="h-10 bg-transparent text-sm font-semibold outline-none"
+          >
+            <option value="">All roles</option>
+            <option value="admin">Admin</option>
+            <option value="faculty">Faculty</option>
+            <option value="student">Student</option>
+          </select>
+        </label>
+        <span className="hidden items-center rounded-lg bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground sm:flex">
+          {users.length} {users.length === 1 ? 'person' : 'people'}
+        </span>
+      </div>
+
+      {query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> :
+        users.length === 0 ? (
+          <EmptyPanel
+            icon={Users}
+            title="No users found"
+            description="Try a different search, or sync from TriByte to populate the roster."
+            action={
+              <Button testId="button-empty-sync-users" onClick={handleSyncTriByte} disabled={syncing}>
+                <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
+                {syncing ? 'Syncing…' : 'Sync from TriByte'}
+              </Button>
+            }
+          />
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-border shadow-xs bg-card">
+            <table className="w-full min-w-[720px] text-left">
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-5 py-4">Person</th>
+                  <th className="px-5 py-4">Role</th>
+                  <th className="px-5 py-4">Group</th>
+                  <th className="px-5 py-4">Status</th>
+                  <th className="px-5 py-4">Last activity</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {users.map((user) => (
+                  <tr key={user.id} data-testid={`row-user-${user.id}`} className="hover:bg-muted/30">
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <span className="grid h-9 w-9 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">{initials(user.name)}</span>
+                        <div>
+                          <p className="text-sm font-bold">{user.name}</p>
+                          <p className="text-xs text-muted-foreground">{user.email}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-4"><Pill>{user.role}</Pill></td>
+                    <td className="px-5 py-4 text-sm text-muted-foreground">{user.group || '—'}</td>
+                    <td className="px-5 py-4"><Pill>{user.status}</Pill></td>
+                    <td className="px-5 py-4 text-[11px] font-semibold text-muted-foreground">{niceDate(user.lastActivity)}</td>
+                    <td className="px-5 py-4 text-right">
+                      <button data-testid={`button-user-more-${user.id}`} aria-label={`More actions for ${user.name}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+
+      {/* CSV Import modal */}
+      {openImport && (
+        <Modal title="Import user roster" onClose={() => setOpenImport(false)}>
+          <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
+            <span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary"><FileUp size={22} /></span>
+            <h3 className="mt-4 text-lg font-bold">Drop your CSV roster here</h3>
+            <p className="mt-1 text-sm text-muted-foreground">The preview will flag missing emails and unknown groups before import.</p>
+            <Button testId="button-select-user-file" variant="outline" onClick={submitImport} disabled={importUsers.isPending}>
+              {importUsers.isPending ? 'Importing…' : 'Choose CSV file'}
+            </Button>
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button testId="button-cancel-user-import" variant="quiet" onClick={() => setOpenImport(false)}>Cancel</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Admin login modal (for TriByte sync) */}
+      {showLogin && (
+        <Modal title="Admin login required" onClose={() => { setShowLogin(false); setPendingSync(false); }}>
+          <p className="mb-4 text-sm text-muted-foreground">Enter your HIMT admin credentials to sync users from TriByte.</p>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <Field label="Username">
+              <input required data-testid="input-admin-username" value={loginUser} onChange={e => setLoginUser(e.target.value)} className="form-input" placeholder="admin username" />
+            </Field>
+            <Field label="Password">
+              <input required type="password" data-testid="input-admin-password" value={loginPass} onChange={e => setLoginPass(e.target.value)} className="form-input" placeholder="••••••••" />
+            </Field>
+            {loginError && <p className="rounded-lg bg-destructive/10 p-3 text-sm font-semibold text-destructive">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-cancel-admin-login" variant="quiet" type="button" onClick={() => { setShowLogin(false); setPendingSync(false); }}>Cancel</Button>
+              <Button testId="button-submit-admin-login" type="submit" disabled={loginBusy}>{loginBusy ? 'Logging in…' : 'Log in & sync'}</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
 
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="block"><span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>{children}</label>; }
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) { return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-[hsl(var(--foreground)/.35)] p-4 backdrop-blur-sm"><div className="max-h-[90dvh] w-full max-w-lg overflow-auto rounded-xl border border-border bg-card p-6 shadow-2xl sm:p-7"><div className="mb-6 flex items-center justify-between"><h2 className="text-2xl font-bold">{title}</h2><button data-testid="button-close-modal" aria-label="Close dialog" onClick={onClose} className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><X size={18} /></button></div>{children}</div></div>; }

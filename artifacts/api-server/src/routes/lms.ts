@@ -533,7 +533,12 @@ router.get("/analytics/overview", (_req, res) => {
 });
 
 router.get("/users", async (_req, res) => {
-  try { res.json(ListUsersResponse.parse(await db.select().from(usersTable))); }
+  try {
+    const rows = await db.select().from(usersTable);
+    // Map DB field groupName → API field group
+    const mapped = rows.map(r => ({ ...r, group: r.groupName ?? '' }));
+    res.json(ListUsersResponse.parse(mapped));
+  }
   catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
@@ -987,6 +992,56 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
+// ─── Shared TriByte helpers ───────────────────────────────────────────────────
+
+const TB_BASE_URL = "https://admin.learn.himtelearning.com";
+const FETCH_TIMEOUT_MS = 30_000;
+
+/** Detect a TriByte login-redirect page (session expired / bad cookie). */
+function isTBLoginPage(html: string): boolean {
+  return html.includes("user/login") && html.includes("form_build_id");
+}
+
+/** Log into TriByte via Drupal form; returns a Cookie header string. */
+async function loginToTriByteShared(tbUser: string, tbPass: string): Promise<string> {
+  const loginPageRes = await fetch(`${TB_BASE_URL}/user/login`, {
+    signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: { "User-Agent": "Mozilla/5.0" },
+  });
+  const loginHtml = await loginPageRes.text();
+  const fbidMatch = loginHtml.match(/name="form_build_id"\s+value="([^"]+)"/);
+  if (!fbidMatch) throw new Error("Could not find form_build_id on TriByte login page");
+
+  const body = new URLSearchParams({
+    name: tbUser, pass: tbPass,
+    form_build_id: fbidMatch[1], form_id: "user_login", op: "Log in",
+  });
+  const loginRes = await fetch(`${TB_BASE_URL}/user/login?destination=reviewer/course/list`, {
+    method:   "POST",
+    signal:   AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers:  { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+    body:     body.toString(),
+    redirect: "manual",
+  });
+  const rawCookies = loginRes.headers.get("set-cookie") ?? "";
+  if (!rawCookies) throw new Error("TriByte login did not return cookies — check credentials");
+  return rawCookies.split(/,(?=[^ ])/).map(c => c.split(";")[0].trim()).join("; ");
+}
+
+/** Resolve a TriByte cookie header from env vars (SESSION → USERNAME+PASSWORD). */
+async function resolveTriByteCookie(): Promise<{ cookie: string; strategy: string } | null> {
+  if (process.env.TRIBYTE_SESSION) {
+    return { cookie: process.env.TRIBYTE_SESSION, strategy: "TRIBYTE_SESSION" };
+  }
+  const tbUser = process.env.TRIBYTE_USERNAME;
+  const tbPass = process.env.TRIBYTE_PASSWORD;
+  if (tbUser && tbPass) {
+    const cookie = await loginToTriByteShared(tbUser, tbPass);
+    return { cookie, strategy: "TRIBYTE_USERNAME/PASSWORD" };
+  }
+  return null;
+}
+
 // ─── Sync courses from TriByte ────────────────────────────────────────────────
 
 /**
@@ -1022,14 +1077,7 @@ function requireAdmin(
  * silently falling back to stale data.
  */
 router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
-  const TB_BASE = "https://admin.learn.himtelearning.com";
-
   interface ScrapedCourse { nid: string; tid: string; name: string; thumbUrl: string; }
-
-  // ── Detect a TriByte login-redirect page (session expired / bad cookie) ──
-  function isLoginPage(html: string): boolean {
-    return html.includes("user/login") && html.includes("form_build_id");
-  }
 
   // ── Parse all course cards from one page of /reviewer/course/list ──
   function parseCoursePage(html: string): ScrapedCourse[] {
@@ -1056,22 +1104,18 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
     return results;
   }
 
-  // 30-second timeout per TriByte request so an unresponsive server cannot leave
-  // the sync handler pending indefinitely.
-  const FETCH_TIMEOUT_MS = 30_000;
-
   // ── Scrape all paginated pages of /reviewer/course/list ──
   async function scrapeAllCourses(cookieHeader: string): Promise<ScrapedCourse[]> {
     const all: ScrapedCourse[] = [];
     for (let page = 0; page <= 20; page++) {
-      const url = `${TB_BASE}/reviewer/course/list${page > 0 ? `?page=${page}` : ""}`;
+      const url = `${TB_BASE_URL}/reviewer/course/list${page > 0 ? `?page=${page}` : ""}`;
       const r   = await fetch(url, {
         signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
         headers: { Cookie: cookieHeader, "User-Agent": "Mozilla/5.0" },
       });
       if (!r.ok) throw new Error(`TriByte responded ${r.status} on page ${page}`);
       const html = await r.text();
-      if (isLoginPage(html)) throw new Error("TriByte session has expired or is invalid");
+      if (isTBLoginPage(html)) throw new Error("TriByte session has expired or is invalid");
       const rows = parseCoursePage(html);
       if (rows.length === 0) break;
       all.push(...rows);
@@ -1080,33 +1124,7 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
     return all;
   }
 
-  // ── Log into TriByte via Drupal form, return session cookie string ──
-  async function loginToTriByte(tbUser: string, tbPass: string): Promise<string> {
-    const loginPageRes = await fetch(`${TB_BASE}/user/login`, {
-      signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
-    const loginHtml  = await loginPageRes.text();
-    const fbidMatch  = loginHtml.match(/name="form_build_id"\s+value="([^"]+)"/);
-    if (!fbidMatch) throw new Error("Could not find form_build_id on TriByte login page");
-
-    const body = new URLSearchParams({
-      name: tbUser, pass: tbPass,
-      form_build_id: fbidMatch[1], form_id: "user_login", op: "Log in",
-    });
-    const loginRes = await fetch(`${TB_BASE}/user/login?destination=reviewer/course/list`, {
-      method:  "POST",
-      signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
-      body:    body.toString(),
-      redirect: "manual",
-    });
-    const rawCookies = loginRes.headers.get("set-cookie") ?? "";
-    if (!rawCookies) throw new Error("TriByte login did not return cookies — check credentials");
-    return rawCookies.split(/,(?=[^ ])/).map(c => c.split(";")[0].trim()).join("; ");
-  }
-
-  // ── Determine whether any TriByte credential variable is set ──
+  // ── Credential resolution — uses shared module-level helpers ──
   // Any nonempty credential env var counts as "configured"; a partial set that
   // cannot form a complete strategy fails closed (502) rather than falling back
   // to static data — the operator must notice the misconfiguration.
@@ -1119,28 +1137,16 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
   const errors: string[] = [];
   let usedStaticFallback = false;
 
-  // Strategy 1: TRIBYTE_SESSION env var
-  const sessionCookie = process.env.TRIBYTE_SESSION;
-  if (sessionCookie && !scraped) {
-    try { scraped = await scrapeAllCourses(sessionCookie); }
-    catch (e) { errors.push(`TRIBYTE_SESSION: ${String(e)}`); }
-  }
-
-  // Strategy 2: TRIBYTE_USERNAME + TRIBYTE_PASSWORD (both required; partial set is
-  // flagged as a configuration error rather than silently skipped).
-  const tbUser = process.env.TRIBYTE_USERNAME;
-  const tbPass = process.env.TRIBYTE_PASSWORD;
-  if (!scraped) {
-    if (tbUser && tbPass) {
-      try {
-        const cookie = await loginToTriByte(tbUser, tbPass);
-        scraped = await scrapeAllCourses(cookie);
-      } catch (e) { errors.push(`TRIBYTE_USERNAME/PASSWORD: ${String(e)}`); }
-    } else if (tbUser || tbPass) {
-      errors.push(
-        "TRIBYTE_USERNAME/PASSWORD: only one of the two env vars is set — both are required",
-      );
+  try {
+    const resolved = await resolveTriByteCookie();
+    if (resolved) {
+      scraped = await scrapeAllCourses(resolved.cookie);
+    } else if (process.env.TRIBYTE_USERNAME || process.env.TRIBYTE_PASSWORD) {
+      // Partial username/password set — flag the misconfiguration
+      errors.push("TRIBYTE_USERNAME/PASSWORD: only one of the two env vars is set — both are required");
     }
+  } catch (e) {
+    errors.push(String(e));
   }
 
   // If any TriByte credential is configured but all strategies failed → error.
@@ -1187,6 +1193,347 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
     }
 
     res.json({ added, updated, total: scraped.length, usedStaticFallback, strategyErrors: errors });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Users & Groups sync from TriByte ────────────────────────────────────────
+
+/**
+ * Static fallback users used in development/demo mode when no TriByte
+ * credentials are configured.  Represents a realistic HIMT roster.
+ */
+const STATIC_TRIBYTE_USERS: Array<{ name: string; email: string; role: string; groupName: string; status: string; lastActivity: string }> = [
+  { name: "Capt. Rajesh Kumar",      email: "rajesh.kumar@himtelearning.com",      role: "faculty",  groupName: "Faculty · Navigation",       status: "Active",  lastActivity: "2 days ago" },
+  { name: "Dr. Meena Rao",           email: "meena.rao@himtelearning.com",          role: "faculty",  groupName: "Faculty · Marine Engineering", status: "Active",  lastActivity: "5 days ago" },
+  { name: "Suresh Pillai",           email: "suresh.pillai@himtelearning.com",      role: "faculty",  groupName: "Faculty · Safety",            status: "Active",  lastActivity: "1 day ago"  },
+  { name: "Anjali Desai",            email: "anjali.desai@himtelearning.com",        role: "admin",    groupName: "Administration",              status: "Active",  lastActivity: "3 hours ago"},
+  { name: "Arun Patel",              email: "arun.patel@himtelearning.com",          role: "student",  groupName: "DNS Batch 2025-A",            status: "Active",  lastActivity: "1 hour ago" },
+  { name: "Bhavesh Joshi",           email: "bhavesh.joshi@himtelearning.com",       role: "student",  groupName: "DNS Batch 2025-A",            status: "Active",  lastActivity: "2 hours ago"},
+  { name: "Chetan Malhotra",         email: "chetan.malhotra@himtelearning.com",     role: "student",  groupName: "DNS Batch 2025-A",            status: "Active",  lastActivity: "Yesterday"  },
+  { name: "Divya Sharma",            email: "divya.sharma@himtelearning.com",        role: "student",  groupName: "DNS Batch 2025-B",            status: "Active",  lastActivity: "3 days ago" },
+  { name: "Ekta Singh",              email: "ekta.singh@himtelearning.com",          role: "student",  groupName: "DNS Batch 2025-B",            status: "Active",  lastActivity: "4 days ago" },
+  { name: "Farhan Qureshi",          email: "farhan.qureshi@himtelearning.com",      role: "student",  groupName: "B.Tech Marine 2025",          status: "Active",  lastActivity: "6 hours ago"},
+  { name: "Geeta Menon",             email: "geeta.menon@himtelearning.com",         role: "student",  groupName: "B.Tech Marine 2025",          status: "Active",  lastActivity: "2 days ago" },
+  { name: "Harish Verma",            email: "harish.verma@himtelearning.com",        role: "student",  groupName: "B.Tech Marine 2025",          status: "Invited", lastActivity: "Never"       },
+  { name: "Indira Krishnaswamy",     email: "indira.k@himtelearning.com",            role: "student",  groupName: "STSDSD Batch Jul 2025",       status: "Active",  lastActivity: "1 week ago" },
+  { name: "Jagdish Nair",            email: "jagdish.nair@himtelearning.com",        role: "student",  groupName: "STSDSD Batch Jul 2025",       status: "Active",  lastActivity: "5 days ago" },
+  { name: "Kavita Bose",             email: "kavita.bose@himtelearning.com",         role: "student",  groupName: "STSDSD Batch Aug 2025",       status: "Active",  lastActivity: "Today"      },
+  { name: "Lalit Tiwari",            email: "lalit.tiwari@himtelearning.com",        role: "student",  groupName: "STSDSD Batch Aug 2025",       status: "Suspended",lastActivity: "3 weeks ago"},
+  { name: "Mohan Das",               email: "mohan.das@himtelearning.com",           role: "student",  groupName: "OSM Thome · Polar",           status: "Active",  lastActivity: "Today"      },
+  { name: "Nalini Subramanian",      email: "nalini.s@himtelearning.com",            role: "student",  groupName: "OSM Thome · Polar",           status: "Active",  lastActivity: "Yesterday"  },
+  { name: "Omkar Patil",             email: "omkar.patil@himtelearning.com",         role: "student",  groupName: "Tanker Safety 2025",          status: "Active",  lastActivity: "2 days ago" },
+  { name: "Poonam Chauhan",          email: "poonam.chauhan@himtelearning.com",      role: "student",  groupName: "Tanker Safety 2025",          status: "Active",  lastActivity: "3 days ago" },
+  { name: "Qasim Ali",               email: "qasim.ali@himtelearning.com",           role: "student",  groupName: "Bulk Carrier Safety 2025",    status: "Active",  lastActivity: "4 hours ago"},
+  { name: "Ritu Kapoor",             email: "ritu.kapoor@himtelearning.com",         role: "student",  groupName: "Bulk Carrier Safety 2025",    status: "Invited", lastActivity: "Never"       },
+  { name: "Santosh Reddy",           email: "santosh.reddy@himtelearning.com",       role: "student",  groupName: "Faculty Familiarization",     status: "Active",  lastActivity: "1 week ago" },
+  { name: "Tanvi Jain",              email: "tanvi.jain@himtelearning.com",          role: "faculty",  groupName: "Faculty · Safety",            status: "Active",  lastActivity: "Today"      },
+];
+
+const STATIC_TRIBYTE_GROUPS = [
+  "DNS Batch 2025-A", "DNS Batch 2025-B", "DNS Batch 2026-A",
+  "B.Tech Marine 2025", "B.Tech Marine 2026",
+  "STSDSD Batch Jul 2025", "STSDSD Batch Aug 2025",
+  "OSM Thome · Polar", "Tanker Safety 2025", "Bulk Carrier Safety 2025",
+  "Faculty Familiarization", "Faculty · Navigation",
+  "Faculty · Marine Engineering", "Faculty · Safety",
+  "Administration", "All Content",
+];
+
+/** Parse users from TriByte /reviewer/users/settings HTML (Drupal view table).
+ *
+ *  Uses column-header detection so group membership is extracted when the page
+ *  includes a "Group" column, rather than always being left blank.
+ */
+function parseTriByteUsersHtml(html: string): Array<{ name: string; email: string; role: string; groupName: string; status: string; lastActivity: string }> {
+  type ParsedUser = { name: string; email: string; role: string; groupName: string; status: string; lastActivity: string };
+  const users: ParsedUser[] = [];
+  const clean = (s: string) =>
+    s.replace(/<[^>]+>/g, ' ')
+     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&#039;/g, "'")
+     .replace(/\s+/g, ' ').trim();
+
+  // ── Step 1: Detect column positions from <thead> ──────────────────────────
+  let nameIdx = 0, emailIdx = -1, groupIdx = -1, roleIdx = -1, statusIdx = -1, accessIdx = -1;
+  const theadM = html.match(/<thead[^>]*>([\s\S]*?)<\/thead>/i);
+  if (theadM) {
+    const headers = [...theadM[1].matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)]
+      .map((c, i) => ({ label: clean(c[1]).toLowerCase(), i }));
+    const fi = (pattern: RegExp) => headers.find(h => pattern.test(h.label))?.i ?? -1;
+    nameIdx   = fi(/\b(name|user)\b/) !== -1 ? fi(/\b(name|user)\b/) : 0;
+    emailIdx  = fi(/e-?mail/);
+    groupIdx  = fi(/\bgroup/);
+    roleIdx   = fi(/\brole/);
+    statusIdx = fi(/\bstatus|active|block/);
+    accessIdx = fi(/last.*(access|activity|login)/);
+  }
+
+  // ── Step 2: Parse <tbody> rows ────────────────────────────────────────────
+  const tbodyM = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
+  const target = tbodyM ? tbodyM[1] : html;
+
+  const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = rowRe.exec(target)) !== null) {
+    const cells = [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(c => clean(c[1]));
+    if (cells.length < 2) continue;
+
+    // Resolve name
+    const name = cells[nameIdx] || cells[0];
+    if (!name || name.length < 2) continue;
+
+    // Resolve email — prefer dedicated column, then scan all cells
+    const emailRaw = emailIdx >= 0 ? cells[emailIdx] : cells.find(c => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c));
+    const email = emailRaw?.trim();
+    if (!email || !email.includes('@')) continue;
+
+    // Resolve group — prefer dedicated column, then scan for batch/group-like values
+    let groupName = '';
+    if (groupIdx >= 0 && cells[groupIdx]) {
+      groupName = cells[groupIdx];
+    } else {
+      // Heuristic: look for a cell that looks like a group name (not email, not role word, not date)
+      const candidate = cells.find(c =>
+        c !== name && c !== email &&
+        !/^(admin|faculty|student|instructor|trainer|learner|active|blocked|suspended|invited|never|today|yesterday)$/i.test(c) &&
+        !/^\d{4}/.test(c) &&
+        /\S/.test(c) && c.length > 1 && c.length < 100
+      );
+      if (candidate) groupName = candidate;
+    }
+
+    // Resolve role
+    let role = 'student';
+    const roleRaw = roleIdx >= 0 ? cells[roleIdx] : cells.find(c => /admin|faculty|instructor|trainer|student|learner/i.test(c));
+    if (roleRaw) {
+      const r = roleRaw.toLowerCase();
+      if (r.includes('admin')) role = 'admin';
+      else if (r.includes('faculty') || r.includes('instructor') || r.includes('trainer')) role = 'faculty';
+    }
+
+    // Resolve status
+    const statusRaw = statusIdx >= 0 ? cells[statusIdx] : cells.find(c => /\b(active|blocked|suspended|invited)\b/i.test(c));
+    const status = statusRaw
+      ? (statusRaw.toLowerCase().includes('block') ? 'Suspended' : statusRaw.trim())
+      : 'Active';
+
+    // Resolve last activity
+    const accessRaw = accessIdx >= 0 ? cells[accessIdx] : cells.find(c => /\d{4}|\bago\b|never|today|yesterday/i.test(c));
+    const lastActivity = accessRaw ?? 'Never';
+
+    users.push({ name, email, role, groupName, status, lastActivity });
+  }
+  return users;
+}
+
+/** Parse groups from TriByte /reviewer/showgroups HTML. */
+function parseTriByteGroupsHtml(html: string): string[] {
+  const groups: string[] = [];
+  const clean = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g,' ').trim();
+  const seen = new Set<string>();
+
+  // Try table rows first
+  const tbodyM = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
+  if (tbodyM) {
+    const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = rowRe.exec(tbodyM[1])) !== null) {
+      const cells = [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(c => clean(c[1]));
+      if (cells[0] && cells[0].length > 1 && !seen.has(cells[0])) {
+        seen.add(cells[0]); groups.push(cells[0]);
+      }
+    }
+  }
+
+  // Fallback: look for views-row divs
+  if (groups.length === 0) {
+    const rowRe = /class="[^"]*views-row[^"]*"[^>]*>([\s\S]*?)<\/(?:div|li)>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = rowRe.exec(html)) !== null) {
+      const text = clean(m[1]);
+      if (text && text.length > 1 && text.length < 120 && !seen.has(text)) {
+        seen.add(text); groups.push(text);
+      }
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * POST /api/users/sync-tribyte
+ *
+ * Protected by requireAdmin.  Scrapes /reviewer/users/settings for users
+ * and /reviewer/showgroups for groups, then upserts both into the DB.
+ * Falls back to a static HIMT-representative dataset when no TriByte
+ * credentials are configured.
+ */
+router.post("/users/sync-tribyte", requireAdmin, async (_req, res) => {
+  let cookieHeader: string | null = null;
+  let strategy = "static-fallback";
+  let usedStaticFallback = false;
+  const errors: string[] = [];
+
+  // Try to get a TriByte session cookie
+  try {
+    const resolved = await resolveTriByteCookie();
+    if (resolved) { cookieHeader = resolved.cookie; strategy = resolved.strategy; }
+  } catch (e) {
+    errors.push(String(e));
+  }
+
+  // Check if any creds were configured (so we can fail-close instead of silently falling back)
+  const hasTribyteCreds =
+    Boolean(process.env.TRIBYTE_SESSION) ||
+    Boolean(process.env.TRIBYTE_USERNAME) ||
+    Boolean(process.env.TRIBYTE_PASSWORD);
+
+  if (hasTribyteCreds && !cookieHeader) {
+    res.status(502).json({
+      error: "TriByte credential strategy failed — could not sync users",
+      strategyErrors: errors,
+    });
+    return;
+  }
+
+  interface ScrapedUser { name: string; email: string; role: string; groupName: string; status: string; lastActivity: string; }
+
+  let scrapedUsers: ScrapedUser[] | null = null;
+  let scrapedGroupNames: string[] | null = null;
+
+  if (cookieHeader) {
+    try {
+      const uRes = await fetch(`${TB_BASE_URL}/reviewer/users/settings`, {
+        signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { Cookie: cookieHeader, "User-Agent": "Mozilla/5.0" },
+      });
+      if (!uRes.ok) throw new Error(`TriByte users page responded ${uRes.status}`);
+      const html = await uRes.text();
+      if (isTBLoginPage(html)) throw new Error("TriByte session expired — re-login required");
+      scrapedUsers = parseTriByteUsersHtml(html);
+    } catch (e) { errors.push(`users scrape: ${String(e)}`); }
+
+    try {
+      const gRes = await fetch(`${TB_BASE_URL}/reviewer/showgroups`, {
+        signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { Cookie: cookieHeader, "User-Agent": "Mozilla/5.0" },
+      });
+      if (gRes.ok) {
+        const html = await gRes.text();
+        if (!isTBLoginPage(html)) scrapedGroupNames = parseTriByteGroupsHtml(html);
+      }
+    } catch (e) { errors.push(`groups scrape: ${String(e)}`); }
+  }
+
+  // ── Credentials configured: fail-closed, no static-data mixing ───────────
+  // When credentials were supplied and a session cookie was resolved, any live
+  // scrape that returns 0 users is treated as a hard failure (permissions,
+  // session expiry, or parse mismatch) — we never write static demo identities
+  // into a live environment.  Groups are best-effort: if the groups page didn't
+  // yield data we derive group names from the users' own groupName fields.
+  if (hasTribyteCreds) {
+    if (!scrapedUsers || scrapedUsers.length === 0) {
+      res.status(502).json({
+        error: "TriByte users page returned no parseable users — check session permissions or page structure",
+        strategyErrors: errors,
+      });
+      return;
+    }
+    // Derive group names from user data if the groups page didn't parse
+    const derivedGroupNames = [...new Set(scrapedUsers.map(u => u.groupName).filter(Boolean))];
+    const groupNamesToImport = (scrapedGroupNames && scrapedGroupNames.length > 0)
+      ? scrapedGroupNames
+      : derivedGroupNames;
+
+    try {
+      let groupsImported = 0;
+      const existingGroups = await db.select().from(groupsTable);
+      const existingGroupNames = new Set(existingGroups.map(g => g.name.toLowerCase()));
+      for (const gname of groupNamesToImport) {
+        if (!existingGroupNames.has(gname.toLowerCase())) {
+          await db.insert(groupsTable).values({ id: `g-tb-${Date.now()}-${groupsImported}`, name: gname }).onConflictDoNothing();
+          groupsImported++;
+        }
+      }
+
+      let usersAdded = 0, usersUpdated = 0;
+      const existingUsers = await db.select().from(usersTable);
+      const byEmail = new Map(existingUsers.map(u => [u.email.toLowerCase(), u]));
+      for (const u of scrapedUsers) {
+        const existing = byEmail.get(u.email.toLowerCase());
+        if (existing) {
+          await db.update(usersTable)
+            .set({ name: u.name, role: u.role, groupName: u.groupName, status: u.status })
+            .where(eq(usersTable.id, existing.id));
+          usersUpdated++;
+        } else {
+          await db.insert(usersTable).values({
+            id: `u-tb-${Date.now()}-${usersAdded}`,
+            name: u.name, email: u.email, role: u.role,
+            groupName: u.groupName, status: u.status, lastActivity: u.lastActivity,
+          }).onConflictDoNothing();
+          usersAdded++;
+        }
+      }
+      res.json({
+        usersAdded, usersUpdated, groupsImported,
+        totalUsers: scrapedUsers.length, totalGroups: groupNamesToImport.length,
+        usedStaticFallback: false, strategy, strategyErrors: errors,
+      });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+    return;
+  }
+
+  // ── No credentials configured: demo/dev mode with static data ────────────
+  usedStaticFallback = true;
+  strategy = "static-fallback";
+  const usersToImport      = STATIC_TRIBYTE_USERS;
+  const groupNamesToImport = STATIC_TRIBYTE_GROUPS;
+
+  try {
+    // ── Upsert groups ──
+    let groupsImported = 0;
+    const existingGroups = await db.select().from(groupsTable);
+    const existingGroupNames = new Set(existingGroups.map(g => g.name.toLowerCase()));
+    for (const gname of groupNamesToImport) {
+      if (!existingGroupNames.has(gname.toLowerCase())) {
+        await db.insert(groupsTable).values({ id: `g-tb-${Date.now()}-${groupsImported}`, name: gname }).onConflictDoNothing();
+        groupsImported++;
+      }
+    }
+
+    // ── Upsert users ──
+    let usersAdded = 0, usersUpdated = 0;
+    const existingUsers = await db.select().from(usersTable);
+    const byEmail = new Map(existingUsers.map(u => [u.email.toLowerCase(), u]));
+
+    for (const u of usersToImport) {
+      const existing = byEmail.get(u.email.toLowerCase());
+      if (existing) {
+        await db.update(usersTable)
+          .set({ name: u.name, role: u.role, groupName: u.groupName, status: u.status })
+          .where(eq(usersTable.id, existing.id));
+        usersUpdated++;
+      } else {
+        await db.insert(usersTable).values({
+          id:           `u-tb-${Date.now()}-${usersAdded}`,
+          name:         u.name,
+          email:        u.email,
+          role:         u.role,
+          groupName:    u.groupName,
+          status:       u.status,
+          lastActivity: u.lastActivity,
+        }).onConflictDoNothing();
+        usersAdded++;
+      }
+    }
+
+    res.json({
+      usersAdded, usersUpdated, groupsImported,
+      totalUsers: usersToImport.length, totalGroups: groupNamesToImport.length,
+      usedStaticFallback, strategy, strategyErrors: errors,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
