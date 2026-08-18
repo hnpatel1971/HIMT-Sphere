@@ -830,6 +830,56 @@ router.delete("/curriculum/topics/:topicId", async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
+// ── Subtopic CRUD ─────────────────────────────────────────────────────────────
+
+// Create a subtopic under a topic
+router.post("/curriculum/topics/:topicId/subtopics", requireAdmin, async (req, res) => {
+  const topicId = String(req.params.topicId);
+  const { name, nid } = req.body as Record<string, string>;
+  if (!name) { res.status(400).json({ error: "name is required" }); return; }
+  try {
+    // Look up the topic so we can get courseId
+    const [topic] = await db.select().from(courseTopicsTable).where(eq(courseTopicsTable.id, topicId));
+    if (!topic) { res.status(404).json({ error: "Topic not found" }); return; }
+    const existing = await db.select().from(courseSubtopicsTable)
+      .where(eq(courseSubtopicsTable.topicId, topicId));
+    const row = {
+      id: `cs-${Date.now()}`,
+      topicId,
+      courseId: topic.courseId,
+      name,
+      nid: nid ?? "",
+      order: existing.length,
+    };
+    await db.insert(courseSubtopicsTable).values(row);
+    res.status(201).json(row);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// Update a subtopic
+router.patch("/curriculum/subtopics/:subtopicId", requireAdmin, async (req, res) => {
+  const subtopicId = String(req.params.subtopicId);
+  const body = req.body as Record<string, unknown>;
+  try {
+    const updates: Record<string, unknown> = {};
+    if (body.name  !== undefined) updates.name  = body.name;
+    if (body.order !== undefined) updates.order = body.order;
+    if (body.nid   !== undefined) updates.nid   = body.nid;
+    await db.update(courseSubtopicsTable).set(updates).where(eq(courseSubtopicsTable.id, subtopicId));
+    const [updated] = await db.select().from(courseSubtopicsTable).where(eq(courseSubtopicsTable.id, subtopicId));
+    res.json(updated ?? { ok: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// Delete a subtopic
+router.delete("/curriculum/subtopics/:subtopicId", requireAdmin, async (req, res) => {
+  const subtopicId = String(req.params.subtopicId);
+  try {
+    await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.id, subtopicId));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
 // ── Helpers for parsing TriByte topics HTML ───────────────────────────────────
 
 /** Walk forward from `startPos` (just inside the opening `<li>` tag) and

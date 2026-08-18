@@ -1244,7 +1244,7 @@ function CourseStructurePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // UI state
+  // UI state — topics
   const [addOpen, setAddOpen] = useState(false);
   const [addName, setAddName] = useState('');
   const [addThumb, setAddThumb] = useState('');
@@ -1254,6 +1254,57 @@ function CourseStructurePage() {
   const [facultyTopic, setFacultyTopic] = useState<CourseTopic | null>(null);
   const [facultyVal, setFacultyVal] = useState('');
   const [importing, setImporting] = useState(false);
+
+  // UI state — subtopics
+  const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
+  const [addSubTopic, setAddSubTopic] = useState<CourseTopic | null>(null);
+  const [addSubName, setAddSubName] = useState('');
+  type SubtopicRow = CourseTopic['subtopics'][number];
+  const [editSub, setEditSub] = useState<SubtopicRow | null>(null);
+  const [editSubName, setEditSubName] = useState('');
+
+  // Admin auth state (session cookie via POST /api/auth/login)
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginUser, setLoginUser] = useState('');
+  const [loginPass, setLoginPass] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  // Deferred action to run after successful login
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ isAdmin: boolean }>('/auth/status')
+      .then(r => setIsAdmin(r.isAdmin))
+      .catch(() => setIsAdmin(false));
+  }, []);
+
+  async function handleAdminLogin(e: FormEvent) {
+    e.preventDefault();
+    setLoginBusy(true); setLoginError('');
+    try {
+      await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
+      setIsAdmin(true); setShowLogin(false); setLoginUser(''); setLoginPass('');
+      if (pendingAction) { const fn = pendingAction; setPendingAction(null); fn(); }
+    } catch (err) {
+      setLoginError(String(err).replace(/^Error:\s*/, ''));
+    } finally { setLoginBusy(false); }
+  }
+
+  function requireAdminThen(action: () => void) {
+    if (isAdmin) { action(); return; }
+    setPendingAction(() => action);
+    setShowLogin(true);
+  }
+
+  function handle401(err: unknown) {
+    const msg = String(err);
+    if (msg.includes('401') || msg.includes('Unauthorized')) {
+      setIsAdmin(false); setShowLogin(true);
+    } else {
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
+    }
+  }
 
   async function loadTopics() {
     setLoading(true); setError('');
@@ -1316,6 +1367,45 @@ function CourseStructurePage() {
     } finally { setImporting(false); }
   }
 
+  function toggleExpanded(topicId: string) {
+    setExpandedTopics(prev => {
+      const next = new Set(prev);
+      if (next.has(topicId)) next.delete(topicId); else next.add(topicId);
+      return next;
+    });
+  }
+
+  async function handleAddSubtopic(e: FormEvent) {
+    e.preventDefault();
+    if (!addSubTopic || !addSubName.trim()) return;
+    try {
+      await apiFetch(`/curriculum/topics/${addSubTopic.id}/subtopics`, 'POST', { name: addSubName.trim() });
+      setAddSubTopic(null); setAddSubName('');
+      loadTopics();
+      toast({ title: 'Sub-topic added' });
+    } catch (err) { handle401(err); }
+  }
+
+  async function handleEditSubSave(e: FormEvent) {
+    e.preventDefault();
+    if (!editSub) return;
+    try {
+      await apiFetch(`/curriculum/subtopics/${editSub.id}`, 'PATCH', { name: editSubName });
+      setEditSub(null);
+      loadTopics();
+      toast({ title: 'Sub-topic updated' });
+    } catch (err) { handle401(err); }
+  }
+
+  async function handleDeleteSubtopic(subId: string, subName: string) {
+    if (!confirm(`Delete sub-topic "${subName}"? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/curriculum/subtopics/${subId}`, 'DELETE');
+      loadTopics();
+      toast({ title: 'Sub-topic deleted' });
+    } catch (err) { handle401(err); }
+  }
+
   const btn = "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors whitespace-nowrap";
   const inp = "rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 w-full";
 
@@ -1363,44 +1453,84 @@ function CourseStructurePage() {
 
         {!loading && !error && topics.length > 0 && (
           <div className="space-y-3">
-            {topics.map((topic, idx) => (
-              <div key={topic.id} className="rounded-xl bg-white border border-gray-100 shadow-xs overflow-hidden">
-                <div className="flex items-center gap-4 p-4">
-                  {/* Thumbnail */}
-                  <div className="shrink-0 h-16 w-20 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
-                    {topic.thumbUrl
-                      ? <img src={topic.thumbUrl} alt={topic.name} className="h-full w-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }}/>
-                      : <BookOpen size={24} className="text-gray-300"/>}
+            {topics.map((topic, idx) => {
+              const isExpanded = expandedTopics.has(topic.id);
+              return (
+                <div key={topic.id} className="rounded-xl bg-white border border-gray-100 shadow-xs overflow-hidden">
+                  {/* Topic row */}
+                  <div className="flex items-center gap-4 p-4">
+                    {/* Thumbnail */}
+                    <div className="shrink-0 h-16 w-20 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
+                      {topic.thumbUrl
+                        ? <img src={topic.thumbUrl} alt={topic.name} className="h-full w-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }}/>
+                        : <BookOpen size={24} className="text-gray-300"/>}
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-800 leading-snug">{idx + 1}. {topic.name}</p>
+                      {topic.faculty && <p className="mt-0.5 text-xs text-gray-400">Faculty: <span className="text-gray-600">{topic.faculty}</span></p>}
+                      {/* Subtopic count / toggle */}
+                      <button
+                        onClick={() => toggleExpanded(topic.id)}
+                        className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        <ChevronDown size={12} className={cx('transition-transform', isExpanded && 'rotate-180')}/>
+                        {topic.subtopics.length} sub-topic{topic.subtopics.length !== 1 ? 's' : ''}
+                      </button>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="shrink-0 flex items-center gap-2">
+                      <button onClick={() => { setEditTopic(topic); setEditName(topic.name); setEditThumb(topic.thumbUrl); }} className={btn}>
+                        <Pencil size={12}/> Edit
+                      </button>
+                      <button onClick={() => handleDelete(topic.id, topic.name)} className={cx(btn, 'text-red-500 border-red-100 hover:bg-red-50 hover:text-red-700')}>
+                        <Trash2 size={12}/> Delete
+                      </button>
+                      <button onClick={() => { setFacultyTopic(topic); setFacultyVal(topic.faculty ?? ''); }} className={btn}>
+                        <Users size={12}/> Set Faculty
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-800 leading-snug">{idx + 1}. {topic.name}</p>
-                    {topic.faculty && <p className="mt-0.5 text-xs text-gray-400">Faculty: <span className="text-gray-600">{topic.faculty}</span></p>}
-                    {topic.subtopics.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {topic.subtopics.map(s => (
-                          <span key={s.id} className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{s.name}</span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="shrink-0 flex items-center gap-2">
-                    <button onClick={() => { setEditTopic(topic); setEditName(topic.name); setEditThumb(topic.thumbUrl); }} className={btn}>
-                      <Pencil size={12}/> Edit
-                    </button>
-                    <button onClick={() => handleDelete(topic.id, topic.name)} className={cx(btn, 'text-red-500 border-red-100 hover:bg-red-50 hover:text-red-700')}>
-                      <Trash2 size={12}/> Delete
-                    </button>
-                    <button onClick={() => { setFacultyTopic(topic); setFacultyVal(topic.faculty ?? ''); }} className={btn}>
-                      <Users size={12}/> Set Faculty
-                    </button>
-                  </div>
+                  {/* Expandable subtopics panel */}
+                  {isExpanded && (
+                    <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
+                      {topic.subtopics.length === 0 && (
+                        <p className="text-xs text-gray-400 italic mb-2">No sub-topics yet. Add one below.</p>
+                      )}
+                      {topic.subtopics.length > 0 && (
+                        <ul className="space-y-1.5 mb-3">
+                          {topic.subtopics.map((s, si) => (
+                            <li key={s.id} className="flex items-center gap-2 rounded-lg bg-white border border-gray-100 px-3 py-2">
+                              <span className="text-[10px] font-semibold text-gray-400 w-5 shrink-0">{si + 1}.</span>
+                              <span className="flex-1 text-xs text-gray-700 font-medium">{s.name}</span>
+                              <button
+                                onClick={() => requireAdminThen(() => { setEditSub(s); setEditSubName(s.name); })}
+                                className="shrink-0 p-1 rounded text-gray-400 hover:text-primary hover:bg-primary/5 transition-colors"
+                                title="Edit sub-topic"
+                              ><Pencil size={11}/></button>
+                              <button
+                                onClick={() => requireAdminThen(() => handleDeleteSubtopic(s.id, s.name))}
+                                className="shrink-0 p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                title="Delete sub-topic"
+                              ><Trash2 size={11}/></button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <button
+                        onClick={() => requireAdminThen(() => { setAddSubTopic(topic); setAddSubName(''); })}
+                        className={cx(btn, 'text-primary border-primary/20 hover:bg-primary/5')}
+                      >
+                        <Plus size={12}/> Add Sub-topic
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -1452,6 +1582,61 @@ function CourseStructurePage() {
             <div className="flex justify-end gap-2 pt-2">
               <Button testId="btn-cancel-faculty" variant="quiet" onClick={() => setFacultyTopic(null)}>Cancel</Button>
               <Button testId="btn-save-faculty" type="submit">Assign</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Admin login modal */}
+      {showLogin && (
+        <Modal title="Admin login" onClose={() => { setShowLogin(false); setPendingAction(null); setLoginError(''); }}>
+          <p className="mb-4 text-sm text-gray-500">Enter your LMS admin credentials to manage sub-topics.</p>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <Field label="Username">
+              <input required autoFocus value={loginUser} onChange={e => setLoginUser(e.target.value)}
+                placeholder="admin" className={cx(inp, 'form-input')} autoComplete="username"/>
+            </Field>
+            <Field label="Password">
+              <input required type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)}
+                className={cx(inp, 'form-input')} autoComplete="current-password"/>
+            </Field>
+            {loginError && <p className="text-sm text-red-600">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="btn-cancel-admin-login-structure" variant="quiet"
+                onClick={() => { setShowLogin(false); setPendingAction(null); setLoginError(''); }}>Cancel</Button>
+              <Button testId="btn-submit-admin-login-structure" type="submit" disabled={loginBusy}>
+                {loginBusy ? 'Signing in…' : 'Sign in'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Add Sub-topic modal */}
+      {addSubTopic && (
+        <Modal title={`Add Sub-topic — ${addSubTopic.name}`} onClose={() => setAddSubTopic(null)}>
+          <form onSubmit={handleAddSubtopic} className="space-y-4">
+            <Field label="Sub-topic name">
+              <input required autoFocus value={addSubName} onChange={e => setAddSubName(e.target.value)} placeholder="e.g. Navigation Charts" className={cx(inp, 'form-input')}/>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="btn-cancel-add-subtopic" variant="quiet" onClick={() => setAddSubTopic(null)}>Cancel</Button>
+              <Button testId="btn-save-add-subtopic" type="submit">Add Sub-topic</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Edit Sub-topic modal */}
+      {editSub && (
+        <Modal title="Edit Sub-topic" onClose={() => setEditSub(null)}>
+          <form onSubmit={handleEditSubSave} className="space-y-4">
+            <Field label="Sub-topic name">
+              <input required autoFocus value={editSubName} onChange={e => setEditSubName(e.target.value)} className={cx(inp, 'form-input')}/>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="btn-cancel-edit-subtopic" variant="quiet" onClick={() => setEditSub(null)}>Cancel</Button>
+              <Button testId="btn-save-edit-subtopic" type="submit">Save</Button>
             </div>
           </form>
         </Modal>
