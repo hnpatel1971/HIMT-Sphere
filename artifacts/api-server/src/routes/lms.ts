@@ -935,14 +935,14 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
     if (!course) { res.status(404).json({ error: "Course not found" }); return; }
     if (!course.tribyteTid) { res.status(400).json({ error: "Course has no TriByte TID — cannot import" }); return; }
 
-    const sessionCookie = process.env.TRIBYTE_SESSION;
-    if (!sessionCookie) {
-      res.status(400).json({ error: "TRIBYTE_SESSION env var not set — cannot scrape TriByte" });
+    const session = await resolveTriByteCookie();
+    if (!session) {
+      res.status(400).json({ error: "No TriByte credentials configured — set TRIBYTE_USERNAME and TRIBYTE_PASSWORD in Secrets" });
       return;
     }
 
     const url = `https://admin.learn.himtelearning.com/reviewer/topics?cat=${course.tribyteTid}&catspec=true`;
-    const htmlRes = await fetch(url, { headers: { Cookie: sessionCookie, "User-Agent": "Mozilla/5.0" } });
+    const htmlRes = await fetch(url, { headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" } });
     if (!htmlRes.ok) { res.status(502).json({ error: `TriByte responded ${htmlRes.status}` }); return; }
     const html = await htmlRes.text();
 
