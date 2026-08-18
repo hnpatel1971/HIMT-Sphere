@@ -516,7 +516,9 @@ function CurriculumCoursesPage() {
   type ApiCourse = {
     id: string; name: string; groupName: string; language: string;
     adaptiveUserName: string; status: string; appliedTags: string[];
+    tribyteNid: string; tribyteTid: string; thumbUrl: string;
   };
+  const TB_BASE = "https://admin.learn.himtelearning.com";
   const { data: rawCourses, loading: coursesLoading, refetch: refetchCourses } = useApi<ApiCourse[]>('/curriculum/list');
   const courses = (rawCourses ?? []).map(c => ({ ...c, group: c.groupName, appliedTags: c.appliedTags ?? [] }));
   const { data: allTags } = useApi<{ id: string; name: string }[]>('/curriculum/tags');
@@ -540,10 +542,10 @@ function CurriculumCoursesPage() {
   const [editForm,      setEditForm]      = useState({ name: '', groupName: 'All Content', language: 'English' });
   const [conceptCourse, setConceptCourse] = useState<ApiCourse | null>(null);
   const [pendingTags,   setPendingTags]   = useState<string[]>([]);
-  const [progressCourse,setProgressCourse]= useState<ApiCourse | null>(null);
+  const [progressMenu,  setProgressMenu]  = useState<string | null>(null);  // course id with open Progress menu
   const [dashMenu,      setDashMenu]      = useState<string | null>(null);  // course id with open DASH menu
   const [othersMenu,    setOthersMenu]    = useState<string | null>(null);  // course id with open Others menu
-  const [adaptiveEdit,  setAdaptiveEdit]  = useState<{ id: string; value: string } | null>(null);
+  const [iframeModal,   setIframeModal]   = useState<{ title: string; url: string } | null>(null);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const filtered = courses.filter(c => {
@@ -588,28 +590,15 @@ function CurriculumCoursesPage() {
   function togglePendingTag(id: string) {
     setPendingTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
   }
-  async function handleStatusChange(courseId: string, newStatus: string) {
-    await apiFetch(`/curriculum/list/${courseId}`, 'PATCH', { status: newStatus });
-    setDashMenu(null); refetchCourses();
-    toast({ title: `Status set to ${newStatus}` });
+  function openTBFrame(title: string, tbPath: string) {
+    setIframeModal({ title, url: `${TB_BASE}${tbPath}` });
+    setProgressMenu(null); setDashMenu(null); setOthersMenu(null);
   }
-  async function handleDuplicate(courseId: string) {
-    await apiFetch(`/curriculum/list/${courseId}/duplicate`, 'POST');
-    setDashMenu(null); refetchCourses();
-    toast({ title: 'Course duplicated', description: 'A draft copy has been added.' });
-  }
-  async function handleSaveAdaptiveUser() {
-    if (!adaptiveEdit) return;
-    await apiFetch(`/curriculum/list/${adaptiveEdit.id}`, 'PATCH', { adaptiveUserName: adaptiveEdit.value });
-    setAdaptiveEdit(null); setOthersMenu(null); refetchCourses();
-    toast({ title: 'Adaptive user updated' });
-  }
-  function exportCSV() {
-    const rows = [['Course Name','Group','Language','Status','Adaptive User'],...courses.map(c=>[c.name,c.group,c.language,c.status,c.adaptiveUserName])];
-    const csv  = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
-    const a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-    a.download = 'courses_export.csv'; a.click();
-    setOthersMenu(null); toast({ title: 'Export complete' });
+  async function handleDeleteCourse(courseId: string) {
+    if (!confirm('Delete this course? This cannot be undone.')) return;
+    await apiFetch(`/curriculum/list/${courseId}`, 'DELETE');
+    setOthersMenu(null); refetchCourses();
+    toast({ title: 'Course deleted' });
   }
 
   const statusBadge = (s: string) => {
@@ -681,10 +670,10 @@ function CurriculumCoursesPage() {
                 className="absolute right-4 top-4 h-4 w-4 accent-primary cursor-pointer"/>
 
               {/* Thumbnail */}
-              <div className="shrink-0 h-24 w-32 rounded-lg flex items-center justify-center relative overflow-hidden"
-                style={{ background: THUMB_COLORS[idx % THUMB_COLORS.length] }}>
-                <div className="absolute inset-1.5 rounded border-2 border-white/20"/>
-                <GraduationCap size={34} className="text-white/80"/>
+              <div className="shrink-0 h-24 w-32 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center relative">
+                {course.thumbUrl
+                  ? <img src={course.thumbUrl} alt={course.name} className="h-full w-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }}/>
+                  : <><div className="absolute inset-0" style={{ background: THUMB_COLORS[idx % THUMB_COLORS.length] }}/><GraduationCap size={34} className="text-white/80 relative z-10"/></>}
               </div>
 
               {/* Course name + meta */}
@@ -707,30 +696,58 @@ function CurriculumCoursesPage() {
               {/* 3 × 2 action buttons */}
               <div className="shrink-0 grid grid-cols-3 gap-2" onClick={e => e.stopPropagation()}>
                 <button onClick={() => openEdit(course)} className={btn}><Pencil size={12}/> Edit</button>
-                <button onClick={() => openConcepts(course)} className={btn}><Sparkles size={12}/> Generate Concepts</button>
-                <button onClick={() => setProgressCourse(course)} className={btn}><TrendingUp size={12}/> Progress</button>
-                <button onClick={() => navigate('/curriculum/courses/structure')} className={btn}><Layers size={12}/> Course Structure</button>
+                {/* Generate Concepts */}
+                <a href={`${TB_BASE}/generate/adaptiveconcept?cat_tid=${course.tribyteTid}`} target="_blank" rel="noopener noreferrer" className={btn}>
+                  <Sparkles size={12}/> Generate Concepts
+                </a>
+
+                {/* Progress dropdown */}
+                <div className="relative">
+                  <button onClick={e => { e.stopPropagation(); setProgressMenu(progressMenu === course.id ? null : course.id); setDashMenu(null); setOthersMenu(null); }} className={btn}>
+                    <TrendingUp size={12}/> Progress
+                  </button>
+                  {progressMenu === course.id && (
+                    <div className="absolute left-0 top-full mt-1 z-50 w-44 rounded-xl bg-white shadow-lg border border-gray-100 py-1 text-sm">
+                      {[
+                        { label: 'Course Progress',   path: `/reviewer/load/frame?nid=${course.tribyteNid}&filter=cg&path=%2Fapps%2Fdashboard%2Fcoursesummary%3Ftid%3D${course.tribyteTid}&destination=reviewer%2Fcourse%2Flist&title=${encodeURIComponent(course.name)}` },
+                        { label: 'Quiz Progress',     path: `/reviewer/load/frame?nid=${course.tribyteNid}&filter=cg&path=%2Fapps%2Fdashboard%2Fgroupassessments%3Fcourse_tid%3D${course.tribyteTid}&destination=reviewer%2Fcourse%2Flist&title=${encodeURIComponent(course.name)}` },
+                        { label: 'Activity Progress', path: `/reviewer/load/frame?nid=${course.tribyteNid}&filter=cg&path=%2Fapps%2Fdashboard%2Fgroupassignments%3Fcourse_tid%3D${course.tribyteTid}&destination=reviewer%2Fcourse%2Flist&title=${encodeURIComponent(course.name)}` },
+                        { label: 'Classroom Progress',path: `/reviewer/load/frame?nid=${course.tribyteNid}&path=%2Fapps%2Fclassroomattendance%2F%3Fcourse_tid%3D${course.tribyteTid}&destination=reviewer%2Fcourse%2Flist` },
+                      ].map(item => (
+                        <button key={item.label} onClick={() => openTBFrame(item.label, item.path)}
+                          className="flex w-full items-center px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Course Structure */}
+                <a href={`${TB_BASE}/reviewer/topics?cat=${course.tribyteTid}&catspec=true`} target="_blank" rel="noopener noreferrer" className={btn}>
+                  <Layers size={12}/> Course Structure
+                </a>
 
                 {/* DASH Actions dropdown */}
                 <div className="relative">
-                  <button onClick={e => { e.stopPropagation(); setDashMenu(dashMenu === course.id ? null : course.id); setOthersMenu(null); }} className={btn}>
+                  <button onClick={e => { e.stopPropagation(); setDashMenu(dashMenu === course.id ? null : course.id); setProgressMenu(null); setOthersMenu(null); }} className={btn}>
                     <Users size={12}/> DASH Actions
                   </button>
                   {dashMenu === course.id && (
-                    <div className="absolute right-0 top-full mt-1 z-50 w-44 rounded-xl bg-white shadow-lg border border-gray-100 py-1 text-sm">
-                      {(['Published','Draft','Archived'] as const).map(s => (
-                        <button key={s} onClick={() => handleStatusChange(course.id, s)}
-                          className={cx('flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-gray-50 transition-colors',
-                            (course.status || 'Published') === s ? 'text-primary font-semibold' : 'text-gray-700')}>
-                          {(course.status || 'Published') === s && <Check size={12}/>}
-                          {(course.status || 'Published') !== s && <span className="w-3"/>}
-                          {s}
+                    <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-xl bg-white shadow-lg border border-gray-100 py-1 text-sm">
+                      {['Generate SRT','Generate Index','Generate Video Breaks','AI Auto-Tag Questions','AI Quiz Generator'].map(label => (
+                        <button key={label} disabled className="flex w-full items-center px-4 py-2 text-left text-gray-300 cursor-not-allowed text-xs" title="AI feature — coming soon">
+                          {label}
                         </button>
                       ))}
                       <div className="my-1 border-t border-gray-100"/>
-                      <button onClick={() => handleDuplicate(course.id)}
-                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
-                        <Copy size={12}/> Duplicate
+                      <button onClick={() => openTBFrame('Find Matching Documents', `/reviewer/load/frame?path=https%3A%2F%2Fdash.tribyte.com%2Fdashadmin%2Fmatchingdocuments%2F%3Fclient%3Delearning-himtmarine-com%26categoryid%3D${course.tribyteNid}&destination=reviewer%2Fcourse%2Flist&title=Find+Matching+Documents`)}
+                        className="flex w-full items-center px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
+                        Find Matching Documents
+                      </button>
+                      <button onClick={() => openTBFrame('Show All Questions', `/reviewer/load/frame?path=https%3A%2F%2Fdash.tribyte.com%2Fdashadmin%2Fanswers%2F%3Fclient%3Delearning-himtmarine-com%26categoryid%3D${course.tribyteNid}&destination=reviewer%2Fcourse%2Flist&title=Show+All+Questions`)}
+                        className="flex w-full items-center px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
+                        Show All Questions
                       </button>
                     </div>
                   )}
@@ -738,31 +755,18 @@ function CurriculumCoursesPage() {
 
                 {/* Others dropdown */}
                 <div className="relative">
-                  <button onClick={e => { e.stopPropagation(); setOthersMenu(othersMenu === course.id ? null : course.id); setDashMenu(null); }} className={btn}>
+                  <button onClick={e => { e.stopPropagation(); setOthersMenu(othersMenu === course.id ? null : course.id); setDashMenu(null); setProgressMenu(null); }} className={btn}>
                     <MoreHorizontal size={12}/> Others
                   </button>
                   {othersMenu === course.id && (
-                    <div className="absolute right-0 top-full mt-1 z-50 w-52 rounded-xl bg-white shadow-lg border border-gray-100 py-1 text-sm">
-                      <div className="px-4 py-2">
-                        <p className="mb-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Adaptive User</p>
-                        {adaptiveEdit?.id === course.id ? (
-                          <div className="flex gap-1">
-                            <input autoFocus value={adaptiveEdit.value} onChange={e => setAdaptiveEdit(a => a ? {...a, value: e.target.value} : null)}
-                              className="flex-1 rounded border border-gray-200 px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary/30"
-                              placeholder="Username…"/>
-                            <button onClick={handleSaveAdaptiveUser} className="rounded bg-primary px-2 py-1 text-xs font-semibold text-white hover:bg-primary/90">Save</button>
-                          </div>
-                        ) : (
-                          <button onClick={() => setAdaptiveEdit({ id: course.id, value: course.adaptiveUserName })}
-                            className="text-xs text-primary hover:underline">
-                            {course.adaptiveUserName || '(not set) — click to set'}
-                          </button>
-                        )}
-                      </div>
-                      <div className="my-1 border-t border-gray-100"/>
-                      <button onClick={exportCSV}
-                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
-                        <Download size={12}/> Export all as CSV
+                    <div className="absolute right-0 top-full mt-1 z-50 w-44 rounded-xl bg-white shadow-lg border border-gray-100 py-1 text-sm">
+                      <a href={`${TB_BASE}/reviewer/createresource?course_nid=${course.tribyteNid}&destination=reviewer%2Fcourse%2Flist`} target="_blank" rel="noopener noreferrer"
+                        className="flex w-full items-center px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
+                        <Upload size={12} className="mr-2"/> Upload TOC
+                      </a>
+                      <button onClick={() => handleDeleteCourse(course.id)}
+                        className="flex w-full items-center px-4 py-2 text-left text-red-600 hover:bg-red-50 transition-colors">
+                        <Trash2 size={12} className="mr-2"/> Delete
                       </button>
                     </div>
                   )}
@@ -856,48 +860,17 @@ function CurriculumCoursesPage() {
         </Modal>
       )}
 
-      {/* ── Progress modal ── */}
-      {progressCourse && (
-        <Modal title={`Progress — ${progressCourse.name}`} onClose={() => setProgressCourse(null)}>
-          <div className="space-y-5">
-            {/* KPI row */}
-            <div className="grid grid-cols-3 gap-4">
-              {[{ label: 'Enrolled', value: Math.floor(Math.random() * 100 + 50) },
-                { label: 'Completed', value: `${Math.floor(Math.random() * 40 + 50)}%` },
-                { label: 'Avg Score', value: `${Math.floor(Math.random() * 20 + 72)}%` }
-              ].map(kpi => (
-                <div key={kpi.label} className="rounded-xl bg-gray-50 border border-gray-100 p-4 text-center">
-                  <p className="text-2xl font-bold text-gray-900">{kpi.value}</p>
-                  <p className="mt-0.5 text-xs text-gray-500">{kpi.label}</p>
-                </div>
-              ))}
+      {/* ── TriByte iframe modal ── */}
+      {iframeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="relative flex flex-col bg-white rounded-2xl shadow-2xl w-full max-w-5xl" style={{ height: '85vh' }}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+              <p className="font-semibold text-gray-800">{iframeModal.title}</p>
+              <button onClick={() => setIframeModal(null)} className="rounded-lg p-1.5 hover:bg-gray-100 text-gray-500 transition-colors"><X size={18}/></button>
             </div>
-            {/* Weekly activity bar chart */}
-            <div>
-              <p className="mb-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">Weekly activity (last 8 weeks)</p>
-              <div className="flex items-end gap-1.5 h-24">
-                {[42,68,54,80,76,62,88,70].map((v, i) => (
-                  <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                    <div className="w-full rounded-t-sm bg-primary/70 transition-all" style={{ height: `${v}%` }}/>
-                    <span className="text-[9px] text-gray-400">W{i + 1}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            {/* Status breakdown */}
-            <div className="rounded-xl border border-gray-100 overflow-hidden">
-              {[['In Progress','text-amber-600',46],['Completed','text-emerald-600',38],['Not Started','text-gray-400',16]].map(([label,cls,pct]) => (
-                <div key={label as string} className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0 border-gray-50">
-                  <span className={cx('text-xs font-semibold w-24', cls as string)}>{label as string}</span>
-                  <div className="flex-1 h-2 rounded-full bg-gray-100">
-                    <div className={cx('h-2 rounded-full', (cls as string).replace('text-','bg-'))} style={{ width: `${pct}%` }}/>
-                  </div>
-                  <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
-                </div>
-              ))}
-            </div>
+            <iframe src={iframeModal.url} className="flex-1 w-full rounded-b-2xl border-0" title={iframeModal.title}/>
           </div>
-        </Modal>
+        </div>
       )}
     </div>
   );

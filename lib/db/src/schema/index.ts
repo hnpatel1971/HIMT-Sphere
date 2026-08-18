@@ -15,8 +15,11 @@ export const curriculumCourses = pgTable("curriculum_courses", {
   groupName:        text("group_name").default("All Content"),
   language:         text("language").default("English").notNull(),
   adaptiveUserName: text("adaptive_user_name").default(""),
-  status:           text("status").default("Published").notNull(),   // Published | Draft | Archived
-  appliedTags:      jsonb("applied_tags").default([]),               // string[] of tag IDs
+  status:           text("status").default("Published").notNull(),
+  appliedTags:      jsonb("applied_tags").default([]),
+  tribyteNid:       text("tribyte_nid").default(""),   // TriByte node ID (for iframe URLs)
+  tribyteTid:       text("tribyte_tid").default(""),   // TriByte taxonomy ID
+  thumbUrl:         text("thumb_url").default(""),     // course thumbnail from TriByte
   createdAt:        timestamp("created_at").defaultNow().notNull(),
 });
 
