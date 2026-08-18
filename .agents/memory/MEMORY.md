@@ -1,0 +1,1 @@
+- [OpenAPI numeric compatibility](generated-zod-integers.md) — generated integer fields currently target a newer Zod helper than this workspace provides.

@@ -10,6 +10,18 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: dashboard
+    description: Role-aware overview data
+  - name: curriculum
+    description: Courses and curriculum structure
+  - name: learning
+    description: Learner activity and progress
+  - name: operations
+    description: Assignments, sessions and announcements
+  - name: compliance
+    description: Certificates and reports
+  - name: administration
+    description: User and access administration
 paths:
   /healthz:
     get:
@@ -24,6 +36,204 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /dashboard:
+    get:
+      operationId: getDashboard
+      tags: [dashboard]
+      summary: Get LMS dashboard
+      responses:
+        "200":
+          description: Dashboard overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+  /courses:
+    get:
+      operationId: listCourses
+      tags: [curriculum]
+      summary: List courses
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: search
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Course list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Course"
+    post:
+      operationId: createCourse
+      tags: [curriculum]
+      summary: Create a course
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CourseInput"
+      responses:
+        "201":
+          description: Created course
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+  /courses/{courseId}:
+    get:
+      operationId: getCourse
+      tags: [curriculum]
+      summary: Get course structure
+      parameters:
+        - in: path
+          name: courseId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Course with hierarchy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CourseDetail"
+        "404":
+          description: Course not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /assignments:
+    get:
+      operationId: listAssignments
+      tags: [operations]
+      summary: List assignment tasks
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Assignment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Assignment"
+    post:
+      operationId: createAssignment
+      tags: [operations]
+      summary: Create an assignment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignmentInput"
+      responses:
+        "201":
+          description: Created assignment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+  /announcements:
+    get:
+      operationId: listAnnouncements
+      tags: [operations]
+      summary: List announcements
+      responses:
+        "200":
+          description: Announcement list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Announcement"
+  /sessions:
+    get:
+      operationId: listSessions
+      tags: [operations]
+      summary: List upcoming sessions
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+  /certificates:
+    get:
+      operationId: listCertificates
+      tags: [compliance]
+      summary: List certificates
+      responses:
+        "200":
+          description: Certificate list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Certificate"
+  /analytics/overview:
+    get:
+      operationId: getAnalyticsOverview
+      tags: [compliance]
+      summary: Get analytics overview
+      responses:
+        "200":
+          description: Analytics overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsOverview"
+  /users:
+    get:
+      operationId: listUsers
+      tags: [administration]
+      summary: List users
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+  /users/import:
+    post:
+      operationId: importUsers
+      tags: [administration]
+      summary: Start a user import
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserImportInput"
+      responses:
+        "201":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportResult"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +243,210 @@ components:
           type: string
       required:
         - status
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+    Course:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        category: { type: string }
+        language: { type: string }
+        status: { type: string }
+        progress: { type: number }
+        learners: { type: number }
+        duration: { type: string }
+        thumbnail: { type: string }
+        nextActivity: { type: ["string", "null"] }
+        accent: { type: string }
+      required: [id, code, name, category, language, status, progress, learners, duration, thumbnail, nextActivity, accent]
+    CourseInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        code: { type: string, minLength: 1 }
+        category: { type: string }
+        language: { type: string }
+        duration: { type: string }
+      required: [name, code, category, language, duration]
+    CourseDetail:
+      allOf:
+        - $ref: "#/components/schemas/Course"
+        - type: object
+          properties:
+            description: { type: string }
+            objectives:
+              type: array
+              items: { type: string }
+            topics:
+              type: array
+              items:
+                $ref: "#/components/schemas/Topic"
+          required: [description, objectives, topics]
+    Topic:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        duration: { type: string }
+        progress: { type: number }
+        locked: { type: boolean }
+        activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Activity"
+      required: [id, title, duration, progress, locked, activities]
+    Activity:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        type: { type: string }
+        duration: { type: string }
+        status: { type: string }
+        protected: { type: boolean }
+      required: [id, title, type, duration, status, protected]
+    Assignment:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        course: { type: string }
+        dueDate: { type: string }
+        status: { type: string }
+        submitted: { type: boolean }
+        assessor: { type: string }
+        priority: { type: string }
+      required: [id, title, course, dueDate, status, submitted, assessor, priority]
+    AssignmentInput:
+      type: object
+      properties:
+        title: { type: string, minLength: 1 }
+        course: { type: string }
+        dueDate: { type: string }
+        assessor: { type: string }
+      required: [title, course, dueDate, assessor]
+    Announcement:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        audience: { type: string }
+        publishedAt: { type: string }
+        unread: { type: boolean }
+      required: [id, title, body, audience, publishedAt, unread]
+    Session:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        course: { type: string }
+        type: { type: string }
+        date: { type: string }
+        time: { type: string }
+        location: { type: string }
+        faculty: { type: string }
+        attendance: { type: string }
+      required: [id, title, course, type, date, time, location, faculty, attendance]
+    Certificate:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        course: { type: string }
+        issuedOn: { type: string }
+        expiresOn: { type: ["string", "null"] }
+        status: { type: string }
+        serial: { type: string }
+      required: [id, title, course, issuedOn, expiresOn, status, serial]
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string }
+        group: { type: string }
+        status: { type: string }
+        lastActivity: { type: string }
+      required: [id, name, email, role, group, status, lastActivity]
+    UserImportInput:
+      type: object
+      properties:
+        filename: { type: string }
+        rows: { type: number, minimum: 1 }
+      required: [filename, rows]
+    ImportResult:
+      type: object
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        status: { type: string }
+        total: { type: number }
+        valid: { type: number }
+        warnings: { type: number }
+        failed: { type: number }
+        progress: { type: number }
+      required: [id, filename, status, total, valid, warnings, failed, progress]
+    Dashboard:
+      type: object
+      properties:
+        learner:
+          $ref: "#/components/schemas/LearnerSummary"
+        courses:
+          type: array
+          items: { $ref: "#/components/schemas/Course" }
+        assignments:
+          type: array
+          items: { $ref: "#/components/schemas/Assignment" }
+        announcements:
+          type: array
+          items: { $ref: "#/components/schemas/Announcement" }
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/Session" }
+        certificates:
+          type: array
+          items: { $ref: "#/components/schemas/Certificate" }
+      required: [learner, courses, assignments, announcements, sessions, certificates]
+    LearnerSummary:
+      type: object
+      properties:
+        name: { type: string }
+        learnerId: { type: string }
+        activeCourses: { type: number }
+        completedCourses: { type: number }
+        averageProgress: { type: number }
+        pendingTasks: { type: number }
+        attendance: { type: number }
+        streak: { type: number }
+      required: [name, learnerId, activeCourses, completedCourses, averageProgress, pendingTasks, attendance, streak]
+    AnalyticsOverview:
+      type: object
+      properties:
+        activeLearners: { type: number }
+        completionRate: { type: number }
+        averageProgress: { type: number }
+        pendingReviews: { type: number }
+        weeklyActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricPoint"
+        coursePerformance:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricPoint"
+      required: [activeLearners, completionRate, averageProgress, pendingReviews, weeklyActivity, coursePerformance]
+    MetricPoint:
+      type: object
+      properties:
+        label: { type: string }
+        value: { type: number }
+      required: [label, value]
 

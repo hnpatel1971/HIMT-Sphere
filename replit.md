@@ -1,6 +1,6 @@
-# [Project name]
+# HIMT Learning Management System
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A role-aware learning management platform for HIMT learners, faculty, academic operations, quality and IT teams.
 
 ## Run & Operate
 
@@ -22,23 +22,31 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/himt-lms/src/App.tsx` — learner and operations interface, routes and API hook wiring
+- `artifacts/himt-lms/src/index.css` — HIMT visual language and responsive theme tokens
+- `lib/api-spec/openapi.yaml` — source of truth for dashboard, curriculum, assignments, sessions, certificates, analytics and user-management contracts
+- `artifacts/api-server/src/routes/lms.ts` — current LMS API surface and demonstration data
+- `lib/api-client-react/src/generated/` — generated typed React Query client
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The first release is contract-first: the OpenAPI document drives both the server validation schemas and the React Query client.
+- The initial API surface uses a small in-memory dataset to keep the proof-of-concept usable while the production data model, migration mapping and storage decisions are finalized.
+- The learner experience and operations surfaces share one responsive shell, with role-aware navigation as the next access-control boundary.
+- Protected-content behavior is represented in the curriculum model (`protected` activities) and is intended to be backed by private storage, short-lived authorization and watermarking in the production implementation.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+The current proof-of-concept includes a learner dashboard, searchable course catalogue, course structure and progress, assignment queue, classroom/webinar schedule, attendance signals, certificate shelf, analytics overview, user and role administration, and bulk-import feedback. The experience is designed around the mandatory HIMT requirements for curriculum hierarchy, learner progress, assessments, sessions, certificates and compliance visibility.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+No additional user preferences recorded.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- After changing `lib/api-spec/openapi.yaml`, run `pnpm --filter @workspace/api-spec run codegen` before using generated client or Zod types.
+- Restart `artifacts/api-server: API Server` and `artifacts/himt-lms: web` after contract, route or frontend changes.
 
 ## Pointers
 

@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "HIMT Learning Management System"
+description = "A role-aware learning management platform for HIMT learners, faculty, academic teams and administrators, covering curriculum, protected content, assessments, attendance, progress, certificates and compliance reporting."
+version = "1.0.0"
+id = "artifacts/himt-lms"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20555
+
+[services.development]
+run = "pnpm --filter @workspace/himt-lms run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/himt-lms", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/himt-lms/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20555"
+BASE_PATH = "/"
