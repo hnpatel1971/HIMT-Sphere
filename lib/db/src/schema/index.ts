@@ -15,6 +15,8 @@ export const curriculumCourses = pgTable("curriculum_courses", {
   groupName:        text("group_name").default("All Content"),
   language:         text("language").default("English").notNull(),
   adaptiveUserName: text("adaptive_user_name").default(""),
+  status:           text("status").default("Published").notNull(),   // Published | Draft | Archived
+  appliedTags:      jsonb("applied_tags").default([]),               // string[] of tag IDs
   createdAt:        timestamp("created_at").defaultNow().notNull(),
 });
 

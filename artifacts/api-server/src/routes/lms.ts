@@ -500,6 +500,32 @@ router.post("/curriculum/list/import", async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
+router.patch("/curriculum/list/:id", async (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  try {
+    const updates: Record<string, unknown> = {};
+    if (body.name             !== undefined) updates.name             = body.name;
+    if (body.groupName        !== undefined) updates.groupName        = body.groupName;
+    if (body.language         !== undefined) updates.language         = body.language;
+    if (body.adaptiveUserName !== undefined) updates.adaptiveUserName = body.adaptiveUserName;
+    if (body.status           !== undefined) updates.status           = body.status;
+    if (body.appliedTags      !== undefined) updates.appliedTags      = body.appliedTags;
+    await db.update(curriculumCoursesTable).set(updates).where(eq(curriculumCoursesTable.id, req.params.id));
+    const [updated] = await db.select().from(curriculumCoursesTable).where(eq(curriculumCoursesTable.id, req.params.id));
+    res.json(updated ?? { ok: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+router.post("/curriculum/list/:id/duplicate", async (req, res) => {
+  try {
+    const [src] = await db.select().from(curriculumCoursesTable).where(eq(curriculumCoursesTable.id, req.params.id));
+    if (!src) { res.status(404).json({ error: "Course not found" }); return; }
+    const copy = { ...src, id: `cl-dup-${Date.now()}`, name: `${src.name} (Copy)`, status: "Draft", createdAt: new Date() };
+    await db.insert(curriculumCoursesTable).values(copy);
+    res.status(201).json(copy);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
 router.delete("/curriculum/list/:id", async (req, res) => {
   try {
     await db.delete(curriculumCoursesTable).where(eq(curriculumCoursesTable.id, req.params.id));

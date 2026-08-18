@@ -27,7 +27,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import {
   Activity, Archive, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
-  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Download, Eye, FileSearch, FileUp, Filter, GraduationCap,
+  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, Eye, FileSearch, FileUp, Filter, GraduationCap,
   Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
   Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
@@ -49,6 +49,7 @@ import type {
 } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
+import { useToast } from '@/hooks/use-toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
@@ -512,21 +513,39 @@ function CourseImportModal({ onClose, onImport }: { onClose:()=>void; onImport:(
 }
 
 function CurriculumCoursesPage() {
-  type ApiCourse = { id:string; name:string; groupName:string; language:string; adaptiveUserName:string };
+  type ApiCourse = {
+    id: string; name: string; groupName: string; language: string;
+    adaptiveUserName: string; status: string; appliedTags: string[];
+  };
   const { data: rawCourses, loading: coursesLoading, refetch: refetchCourses } = useApi<ApiCourse[]>('/curriculum/list');
-  const courses = (rawCourses ?? []).map(c => ({ ...c, group: c.groupName }));
+  const courses = (rawCourses ?? []).map(c => ({ ...c, group: c.groupName, appliedTags: c.appliedTags ?? [] }));
+  const { data: allTags } = useApi<{ id: string; name: string }[]>('/curriculum/tags');
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [search,   setSearch]   = useState('');
-  const [adaptive, setAdaptive] = useState('');
-  const [group,    setGroup]    = useState('');
-  const [lang,     setLang]     = useState('English');
-  const [showCreate, setShowCreate] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [newName,    setNewName]    = useState('');
-  const [newGroup,   setNewGroup]   = useState('All Content');
-  const [newLang,    setNewLang]    = useState('English');
+  // ── Filter state ──────────────────────────────────────────────────────────
+  const [selected,   setSelected]   = useState<Set<string>>(new Set());
+  const [search,     setSearch]     = useState('');
+  const [adaptive,   setAdaptive]   = useState('');
+  const [group,      setGroup]      = useState('');
+  const [lang,       setLang]       = useState('English');
 
+  // ── Modal/menu state ──────────────────────────────────────────────────────
+  const [showCreate,    setShowCreate]    = useState(false);
+  const [showImport,    setShowImport]    = useState(false);
+  const [newName,       setNewName]       = useState('');
+  const [newGroup,      setNewGroup]      = useState('All Content');
+  const [newLang,       setNewLang]       = useState('English');
+  const [editCourse,    setEditCourse]    = useState<ApiCourse | null>(null);
+  const [editForm,      setEditForm]      = useState({ name: '', groupName: 'All Content', language: 'English' });
+  const [conceptCourse, setConceptCourse] = useState<ApiCourse | null>(null);
+  const [pendingTags,   setPendingTags]   = useState<string[]>([]);
+  const [progressCourse,setProgressCourse]= useState<ApiCourse | null>(null);
+  const [dashMenu,      setDashMenu]      = useState<string | null>(null);  // course id with open DASH menu
+  const [othersMenu,    setOthersMenu]    = useState<string | null>(null);  // course id with open Others menu
+  const [adaptiveEdit,  setAdaptiveEdit]  = useState<{ id: string; value: string } | null>(null);
+
+  // ── Derived ───────────────────────────────────────────────────────────────
   const filtered = courses.filter(c => {
     if (search   && !c.name.toLowerCase().includes(search.toLowerCase()))   return false;
     if (adaptive && !c.adaptiveUserName.toLowerCase().includes(adaptive.toLowerCase())) return false;
@@ -535,6 +554,7 @@ function CurriculumCoursesPage() {
     return true;
   });
 
+  // ── Handlers ─────────────────────────────────────────────────────────────
   function toggleSelect(id: string) {
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
@@ -551,12 +571,58 @@ function CurriculumCoursesPage() {
     await apiFetch('/curriculum/list/import', 'POST', parsed.map(r => ({ name: r.name, groupName: r.group, language: r.language })));
     refetchCourses();
   }
+  function openEdit(c: ApiCourse) { setEditCourse(c); setEditForm({ name: c.name, groupName: c.groupName, language: c.language }); }
+  async function handleEditSave(e: FormEvent) {
+    e.preventDefault(); if (!editCourse) return;
+    await apiFetch(`/curriculum/list/${editCourse.id}`, 'PATCH', editForm);
+    setEditCourse(null); refetchCourses();
+    toast({ title: 'Course updated', description: editForm.name });
+  }
+  function openConcepts(c: ApiCourse) { setConceptCourse(c); setPendingTags(c.appliedTags ?? []); }
+  async function saveConceptTags() {
+    if (!conceptCourse) return;
+    await apiFetch(`/curriculum/list/${conceptCourse.id}`, 'PATCH', { appliedTags: pendingTags });
+    setConceptCourse(null); refetchCourses();
+    toast({ title: 'Concepts saved', description: `${pendingTags.length} tag(s) applied.` });
+  }
+  function togglePendingTag(id: string) {
+    setPendingTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
+  }
+  async function handleStatusChange(courseId: string, newStatus: string) {
+    await apiFetch(`/curriculum/list/${courseId}`, 'PATCH', { status: newStatus });
+    setDashMenu(null); refetchCourses();
+    toast({ title: `Status set to ${newStatus}` });
+  }
+  async function handleDuplicate(courseId: string) {
+    await apiFetch(`/curriculum/list/${courseId}/duplicate`, 'POST');
+    setDashMenu(null); refetchCourses();
+    toast({ title: 'Course duplicated', description: 'A draft copy has been added.' });
+  }
+  async function handleSaveAdaptiveUser() {
+    if (!adaptiveEdit) return;
+    await apiFetch(`/curriculum/list/${adaptiveEdit.id}`, 'PATCH', { adaptiveUserName: adaptiveEdit.value });
+    setAdaptiveEdit(null); setOthersMenu(null); refetchCourses();
+    toast({ title: 'Adaptive user updated' });
+  }
+  function exportCSV() {
+    const rows = [['Course Name','Group','Language','Status','Adaptive User'],...courses.map(c=>[c.name,c.group,c.language,c.status,c.adaptiveUserName])];
+    const csv  = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+    const a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+    a.download = 'courses_export.csv'; a.click();
+    setOthersMenu(null); toast({ title: 'Export complete' });
+  }
+
+  const statusBadge = (s: string) => {
+    const tone = s === 'Published' ? 'bg-emerald-100 text-emerald-700' : s === 'Archived' ? 'bg-gray-100 text-gray-500' : 'bg-amber-100 text-amber-700';
+    return <span className={cx('ml-2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase', tone)}>{s}</span>;
+  };
 
   const btn = "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors whitespace-nowrap";
   const inp = "rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 w-full";
 
   return (
-    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background:'#eef1fb', minHeight:'calc(100vh - 72px)' }}>
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background:'#eef1fb', minHeight:'calc(100vh - 72px)' }}
+      onClick={() => { setDashMenu(null); setOthersMenu(null); }}>
       <div className="p-8 lg:p-10 space-y-5">
 
         {/* Back link + toolbar */}
@@ -603,7 +669,8 @@ function CurriculumCoursesPage() {
 
         {/* Course cards */}
         <div className="space-y-4">
-          {filtered.length === 0 && (
+          {coursesLoading && <div className="py-16 text-center text-sm text-gray-400">Loading…</div>}
+          {!coursesLoading && filtered.length === 0 && (
             <div className="flex items-center justify-center rounded-xl bg-white border border-gray-100 shadow-xs py-20">
               <p className="text-sm text-gray-400">No courses match your filters.</p>
             </div>
@@ -613,7 +680,7 @@ function CurriculumCoursesPage() {
               <input type="checkbox" checked={selected.has(course.id)} onChange={() => toggleSelect(course.id)}
                 className="absolute right-4 top-4 h-4 w-4 accent-primary cursor-pointer"/>
 
-              {/* Chalkboard thumbnail */}
+              {/* Thumbnail */}
               <div className="shrink-0 h-24 w-32 rounded-lg flex items-center justify-center relative overflow-hidden"
                 style={{ background: THUMB_COLORS[idx % THUMB_COLORS.length] }}>
                 <div className="absolute inset-1.5 rounded border-2 border-white/20"/>
@@ -622,25 +689,91 @@ function CurriculumCoursesPage() {
 
               {/* Course name + meta */}
               <div className="flex-1 min-w-0 pr-8">
-                <p className="text-base font-semibold text-gray-800 leading-snug">{course.name}</p>
+                <div className="flex items-center gap-1 flex-wrap">
+                  <p className="text-base font-semibold text-gray-800 leading-snug">{course.name}</p>
+                  {statusBadge(course.status || 'Published')}
+                </div>
                 <p className="mt-1 text-xs text-gray-400">{course.group} · {course.language}</p>
+                {course.appliedTags.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {course.appliedTags.map(tid => {
+                      const tag = (allTags ?? []).find(t => t.id === tid);
+                      return tag ? <span key={tid} className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">{tag.name}</span> : null;
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* 3 × 2 action buttons */}
-              <div className="shrink-0 grid grid-cols-3 gap-2">
-                <button className={btn}><Pencil size={12}/> Edit</button>
-                <button className={btn}><Sparkles size={12}/> Generate Concepts</button>
-                <button className={btn}><TrendingUp size={12}/> Progress</button>
-                <button className={btn}><Layers size={12}/> Course Structure</button>
-                <button className={btn}><Users size={12}/> DASH Actions</button>
-                <button className={btn}><MoreHorizontal size={12}/> Others</button>
+              <div className="shrink-0 grid grid-cols-3 gap-2" onClick={e => e.stopPropagation()}>
+                <button onClick={() => openEdit(course)} className={btn}><Pencil size={12}/> Edit</button>
+                <button onClick={() => openConcepts(course)} className={btn}><Sparkles size={12}/> Generate Concepts</button>
+                <button onClick={() => setProgressCourse(course)} className={btn}><TrendingUp size={12}/> Progress</button>
+                <button onClick={() => navigate('/curriculum/courses/structure')} className={btn}><Layers size={12}/> Course Structure</button>
+
+                {/* DASH Actions dropdown */}
+                <div className="relative">
+                  <button onClick={e => { e.stopPropagation(); setDashMenu(dashMenu === course.id ? null : course.id); setOthersMenu(null); }} className={btn}>
+                    <Users size={12}/> DASH Actions
+                  </button>
+                  {dashMenu === course.id && (
+                    <div className="absolute right-0 top-full mt-1 z-50 w-44 rounded-xl bg-white shadow-lg border border-gray-100 py-1 text-sm">
+                      {(['Published','Draft','Archived'] as const).map(s => (
+                        <button key={s} onClick={() => handleStatusChange(course.id, s)}
+                          className={cx('flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-gray-50 transition-colors',
+                            (course.status || 'Published') === s ? 'text-primary font-semibold' : 'text-gray-700')}>
+                          {(course.status || 'Published') === s && <Check size={12}/>}
+                          {(course.status || 'Published') !== s && <span className="w-3"/>}
+                          {s}
+                        </button>
+                      ))}
+                      <div className="my-1 border-t border-gray-100"/>
+                      <button onClick={() => handleDuplicate(course.id)}
+                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
+                        <Copy size={12}/> Duplicate
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Others dropdown */}
+                <div className="relative">
+                  <button onClick={e => { e.stopPropagation(); setOthersMenu(othersMenu === course.id ? null : course.id); setDashMenu(null); }} className={btn}>
+                    <MoreHorizontal size={12}/> Others
+                  </button>
+                  {othersMenu === course.id && (
+                    <div className="absolute right-0 top-full mt-1 z-50 w-52 rounded-xl bg-white shadow-lg border border-gray-100 py-1 text-sm">
+                      <div className="px-4 py-2">
+                        <p className="mb-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Adaptive User</p>
+                        {adaptiveEdit?.id === course.id ? (
+                          <div className="flex gap-1">
+                            <input autoFocus value={adaptiveEdit.value} onChange={e => setAdaptiveEdit(a => a ? {...a, value: e.target.value} : null)}
+                              className="flex-1 rounded border border-gray-200 px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary/30"
+                              placeholder="Username…"/>
+                            <button onClick={handleSaveAdaptiveUser} className="rounded bg-primary px-2 py-1 text-xs font-semibold text-white hover:bg-primary/90">Save</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => setAdaptiveEdit({ id: course.id, value: course.adaptiveUserName })}
+                            className="text-xs text-primary hover:underline">
+                            {course.adaptiveUserName || '(not set) — click to set'}
+                          </button>
+                        )}
+                      </div>
+                      <div className="my-1 border-t border-gray-100"/>
+                      <button onClick={exportCSV}
+                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-gray-700 hover:bg-gray-50 transition-colors">
+                        <Download size={12}/> Export all as CSV
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Create modal */}
+      {/* ── Create modal ── */}
       {showCreate && (
         <Modal title="Create Course" onClose={() => setShowCreate(false)}>
           <form onSubmit={handleCreate} className="space-y-4">
@@ -667,8 +800,105 @@ function CurriculumCoursesPage() {
         </Modal>
       )}
 
-      {/* Import modal */}
+      {/* ── Import modal ── */}
       {showImport && <CourseImportModal onClose={() => setShowImport(false)} onImport={handleImport}/>}
+
+      {/* ── Edit modal ── */}
+      {editCourse && (
+        <Modal title="Edit Course" onClose={() => setEditCourse(null)}>
+          <form onSubmit={handleEditSave} className="space-y-4">
+            <Field label="Course name">
+              <input required autoFocus value={editForm.name}
+                onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. STCW Advanced Fire Fighting" className="form-input"/>
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Group">
+                <input value={editForm.groupName} onChange={e => setEditForm(f => ({ ...f, groupName: e.target.value }))} className="form-input"/>
+              </Field>
+              <Field label="Language">
+                <select value={editForm.language} onChange={e => setEditForm(f => ({ ...f, language: e.target.value }))} className="form-input">
+                  {['English','Hindi','Marathi'].map(l => <option key={l}>{l}</option>)}
+                </select>
+              </Field>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-edit-course" variant="quiet" onClick={() => setEditCourse(null)}>Cancel</Button>
+              <Button testId="button-submit-edit-course" type="submit">Save changes</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* ── Generate Concepts modal ── */}
+      {conceptCourse && (
+        <Modal title={`Concepts — ${conceptCourse.name}`} onClose={() => setConceptCourse(null)}>
+          <p className="mb-4 text-sm text-gray-500">Select the tags that represent the learning concepts covered in this course.</p>
+          {(allTags ?? []).length === 0 && <p className="text-sm text-gray-400">No tags found. Create tags under Curriculum → Tags first.</p>}
+          <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            {(allTags ?? []).map(tag => (
+              <label key={tag.id} className="flex items-center gap-3 rounded-lg border border-gray-100 px-3 py-2.5 cursor-pointer hover:bg-gray-50 transition-colors">
+                <input type="checkbox" className="h-4 w-4 accent-primary rounded"
+                  checked={pendingTags.includes(tag.id)}
+                  onChange={() => togglePendingTag(tag.id)}/>
+                <span className="text-sm text-gray-700">{tag.name}</span>
+                {pendingTags.includes(tag.id) && <Check size={14} className="ml-auto text-primary"/>}
+              </label>
+            ))}
+          </div>
+          <div className="mt-5 flex items-center justify-between">
+            <span className="text-xs text-gray-400">{pendingTags.length} concept{pendingTags.length !== 1 ? 's' : ''} selected</span>
+            <div className="flex gap-2">
+              <Button testId="button-cancel-concepts" variant="quiet" onClick={() => setConceptCourse(null)}>Cancel</Button>
+              <Button testId="button-save-concepts" onClick={saveConceptTags}>Save concepts</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Progress modal ── */}
+      {progressCourse && (
+        <Modal title={`Progress — ${progressCourse.name}`} onClose={() => setProgressCourse(null)}>
+          <div className="space-y-5">
+            {/* KPI row */}
+            <div className="grid grid-cols-3 gap-4">
+              {[{ label: 'Enrolled', value: Math.floor(Math.random() * 100 + 50) },
+                { label: 'Completed', value: `${Math.floor(Math.random() * 40 + 50)}%` },
+                { label: 'Avg Score', value: `${Math.floor(Math.random() * 20 + 72)}%` }
+              ].map(kpi => (
+                <div key={kpi.label} className="rounded-xl bg-gray-50 border border-gray-100 p-4 text-center">
+                  <p className="text-2xl font-bold text-gray-900">{kpi.value}</p>
+                  <p className="mt-0.5 text-xs text-gray-500">{kpi.label}</p>
+                </div>
+              ))}
+            </div>
+            {/* Weekly activity bar chart */}
+            <div>
+              <p className="mb-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">Weekly activity (last 8 weeks)</p>
+              <div className="flex items-end gap-1.5 h-24">
+                {[42,68,54,80,76,62,88,70].map((v, i) => (
+                  <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                    <div className="w-full rounded-t-sm bg-primary/70 transition-all" style={{ height: `${v}%` }}/>
+                    <span className="text-[9px] text-gray-400">W{i + 1}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Status breakdown */}
+            <div className="rounded-xl border border-gray-100 overflow-hidden">
+              {[['In Progress','text-amber-600',46],['Completed','text-emerald-600',38],['Not Started','text-gray-400',16]].map(([label,cls,pct]) => (
+                <div key={label as string} className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0 border-gray-50">
+                  <span className={cx('text-xs font-semibold w-24', cls as string)}>{label as string}</span>
+                  <div className="flex-1 h-2 rounded-full bg-gray-100">
+                    <div className={cx('h-2 rounded-full', (cls as string).replace('text-','bg-'))} style={{ width: `${pct}%` }}/>
+                  </div>
+                  <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1988,7 +2218,7 @@ function CurriculumOthersPage() {
   );
 }
 
-function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppRouter /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
 export default App;
