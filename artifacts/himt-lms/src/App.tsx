@@ -1056,13 +1056,22 @@ function AddCOModal({ courseId, existingCount, onClose, onSaved, addOutcome }: {
 
 // ─── CurriculumGroupsPage ─────────────────────────────────────────────────────
 type GroupNode = { id: string; name: string; children?: GroupNode[] };
-const GROUPS_SEED: GroupNode[] = [
-  { id: 'g-all-content', name: 'All Content', children: [
-    { id: 'g-marine-eng', name: 'Marine Engineering', children: [] },
-    { id: 'g-nautical-sci', name: 'Nautical Science', children: [] },
-  ]},
-  { id: 'g-all-reports', name: 'All Reports' },
-];
+type GroupRow  = { id: string; name: string; parentId: string | null };
+
+function buildGroupTree(rows: GroupRow[]): GroupNode[] {
+  const lookup: Record<string, GroupNode> = {};
+  rows.forEach(r => { lookup[r.id] = { id: r.id, name: r.name, children: [] }; });
+  const roots: GroupNode[] = [];
+  rows.forEach(r => {
+    const node = lookup[r.id];
+    if (r.parentId && lookup[r.parentId]) {
+      lookup[r.parentId].children!.push(node);
+    } else {
+      roots.push(node);
+    }
+  });
+  return roots;
+}
 
 function GroupTreeItem({ node, depth, selected, onSelect, expanded, onToggle }: {
   node: GroupNode; depth: number; selected: string | null;
@@ -1116,18 +1125,35 @@ function CurriculumGroupsPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showCreate, setShowCreate] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
-  const [groups, setGroups] = useState<GroupNode[]>(GROUPS_SEED);
+  const [busy, setBusy] = useState(false);
+
+  const { data: rawGroups, loading, error, refetch } = useApi<GroupRow[]>('/curriculum/groups');
+  const groups = buildGroupTree(rawGroups ?? []);
 
   function toggleExpand(id: string) {
     setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
 
-  function handleCreate(e: FormEvent) {
+  async function handleCreate(e: FormEvent) {
     e.preventDefault();
-    if (!newGroupName.trim()) return;
-    setGroups(g => [...g, { id: `g-${Date.now()}`, name: newGroupName.trim() }]);
-    setNewGroupName('');
-    setShowCreate(false);
+    if (!newGroupName.trim() || busy) return;
+    setBusy(true);
+    try {
+      await apiFetch('/curriculum/groups', 'POST', { name: newGroupName.trim() });
+      setNewGroupName('');
+      setShowCreate(false);
+      refetch();
+    } finally { setBusy(false); }
+  }
+
+  async function handleDelete() {
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      await apiFetch(`/curriculum/groups/${selected}`, 'DELETE');
+      setSelected(null);
+      refetch();
+    } finally { setBusy(false); }
   }
 
   const toolbarBtn = (label: string, icon: ReactNode, onClick?: () => void, disabled = false) => (
@@ -1155,7 +1181,7 @@ function CurriculumGroupsPage() {
           <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white shadow-xs overflow-hidden">
             {toolbarBtn('Create', <Scissors size={13} />, () => setShowCreate(true))}
             {toolbarBtn('Edit', <Pencil size={13} />, undefined, !selected)}
-            {toolbarBtn('Delete', <Trash2 size={13} />, undefined, !selected)}
+            {toolbarBtn('Delete', <Trash2 size={13} />, handleDelete, !selected || busy)}
             {toolbarBtn('Import', <Download size={13} />)}
             {toolbarBtn('Course Schedule', <CalendarDays size={13} />)}
             {toolbarBtn('Archived', <Archive size={13} />)}
@@ -1164,12 +1190,14 @@ function CurriculumGroupsPage() {
 
         {/* Group tree */}
         <div className="rounded-xl bg-white border border-gray-100 shadow-xs py-2">
-          {groups.map(node => (
+          {loading && <p className="px-4 py-6 text-center text-sm text-gray-400">Loading groups…</p>}
+          {error && <ErrorPanel onRetry={refetch} compact />}
+          {!loading && !error && groups.map(node => (
             <GroupTreeItem key={node.id} node={node} depth={0}
               selected={selected} onSelect={setSelected}
               expanded={expanded} onToggle={toggleExpand} />
           ))}
-          {groups.length === 0 && (
+          {!loading && !error && groups.length === 0 && (
             <p className="px-4 py-6 text-center text-sm text-gray-400">No groups yet. Click Create to add one.</p>
           )}
         </div>
@@ -1190,7 +1218,7 @@ function CurriculumGroupsPage() {
             </Field>
             <div className="flex justify-end gap-2 pt-1">
               <Button testId="button-cancel-group" variant="quiet" onClick={() => setShowCreate(false)}>Cancel</Button>
-              <Button testId="button-submit-group" type="submit">Create</Button>
+              <Button testId="button-submit-group" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create'}</Button>
             </div>
           </form>
         </Modal>
