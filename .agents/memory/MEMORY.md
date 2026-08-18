@@ -1,1 +1,2 @@
 - [OpenAPI numeric compatibility](generated-zod-integers.md) — generated integer fields currently target a newer Zod helper than this workspace provides.
+- [DB-backed LMS architecture](lms-db-architecture.md) — all curriculum pages now call real API; seed runs once on server start.

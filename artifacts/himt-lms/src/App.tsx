@@ -1,4 +1,28 @@
-import { type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react';
+
+// ─── Shared API helpers ───────────────────────────────────────────────────────
+const API = '/api';
+async function apiFetch<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const r = await fetch(`${API}${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json() as Promise<T>;
+}
+function useApi<T>(path: string, deps: unknown[] = []) {
+  const [data,    setData]    = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState('');
+  const load = useCallback(() => {
+    setLoading(true);
+    apiFetch<T>(path).then(d => { setData(d); setLoading(false); }).catch(e => { setError(String(e)); setLoading(false); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, ...deps]);
+  useEffect(() => { load(); }, [load]);
+  return { data, loading, error, refetch: load };
+}
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import {
@@ -473,7 +497,10 @@ function CourseImportModal({ onClose, onImport }: { onClose:()=>void; onImport:(
 }
 
 function CurriculumCoursesPage() {
-  const [courses,  setCourses]  = useState<CourseListItem[]>(COURSES_LIST_SEED);
+  type ApiCourse = { id:string; name:string; groupName:string; language:string; adaptiveUserName:string };
+  const { data: rawCourses, loading: coursesLoading, refetch: refetchCourses } = useApi<ApiCourse[]>('/curriculum/list');
+  const courses = (rawCourses ?? []).map(c => ({ ...c, group: c.groupName }));
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search,   setSearch]   = useState('');
   const [adaptive, setAdaptive] = useState('');
@@ -496,11 +523,18 @@ function CurriculumCoursesPage() {
   function toggleSelect(id: string) {
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
-  function handleDeleteSelected() { setCourses(c => c.filter(r => !selected.has(r.id))); setSelected(new Set()); }
-  function handleCreate(e: FormEvent) {
+  async function handleDeleteSelected() {
+    await Promise.all([...selected].map(id => apiFetch(`/curriculum/list/${id}`, 'DELETE')));
+    setSelected(new Set()); refetchCourses();
+  }
+  async function handleCreate(e: FormEvent) {
     e.preventDefault(); if (!newName.trim()) return;
-    setCourses(c => [...c, { id:`cl-${Date.now()}`, name:newName.trim(), group:newGroup, language:newLang, adaptiveUserName:'' }]);
-    setNewName(''); setShowCreate(false);
+    await apiFetch('/curriculum/list', 'POST', { name: newName.trim(), groupName: newGroup, language: newLang });
+    setNewName(''); setShowCreate(false); refetchCourses();
+  }
+  async function handleImport(parsed: CourseListItem[]) {
+    await apiFetch('/curriculum/list/import', 'POST', parsed.map(r => ({ name: r.name, groupName: r.group, language: r.language })));
+    refetchCourses();
   }
 
   const btn = "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors whitespace-nowrap";
@@ -619,7 +653,7 @@ function CurriculumCoursesPage() {
       )}
 
       {/* Import modal */}
-      {showImport && <CourseImportModal onClose={() => setShowImport(false)} onImport={rows => setCourses(c => [...c, ...rows])}/>}
+      {showImport && <CourseImportModal onClose={() => setShowImport(false)} onImport={handleImport}/>}
     </div>
   );
 }
@@ -1472,31 +1506,28 @@ function CurriculumContentsPage() {
 }
 
 // ─── CurriculumTagsPage ───────────────────────────────────────────────────────
-const TAGS_SEED = [
-  'Bridge Watchkeeping', 'STCW Training', 'Fire Safety', 'ECDIS Navigation',
-  'COLREG Compliance', 'Maritime Law', 'Engine Room Operations',
-  'Environmental Awareness', 'GMDSS Operations', 'Passage Planning',
-];
-
 function CurriculumTagsPage() {
-  const [tags, setTags]           = useState(TAGS_SEED);
+  type Tag = { id: string; name: string };
+  const { data: tags, loading: tagsLoading, refetch: refetchTags } = useApi<Tag[]>('/curriculum/tags');
   const [query, setQuery]         = useState('');
   const [applied, setApplied]     = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [newTag, setNewTag]       = useState('');
 
-  const displayed = tags.filter(t => t.toLowerCase().includes(applied.toLowerCase()));
+  const displayed = (tags ?? []).filter(t => t.name.toLowerCase().includes(applied.toLowerCase()));
 
   function handleGo()   { setApplied(query); }
-  function handleReset(){ setQuery(''); setApplied(''); }
-  function handleDeleteTag(name: string) { setTags(t => t.filter(x => x !== name)); }
-  function handleCreate(e: FormEvent) {
+  function handleReset(){ setQuery(''); setApplied(''); refetchTags(); }
+  async function handleDeleteTag(id: string) {
+    await apiFetch(`/curriculum/tags/${id}`, 'DELETE');
+    refetchTags();
+  }
+  async function handleCreate(e: FormEvent) {
     e.preventDefault();
     const trimmed = newTag.trim();
-    if (!trimmed || tags.includes(trimmed)) return;
-    setTags(t => [...t, trimmed]);
-    setNewTag('');
-    setShowCreate(false);
+    if (!trimmed) return;
+    await apiFetch('/curriculum/tags', 'POST', { name: trimmed });
+    setNewTag(''); setShowCreate(false); refetchTags();
   }
 
   return (
@@ -1553,13 +1584,13 @@ function CurriculumTagsPage() {
               <p className="py-8 text-center text-sm text-gray-400">No tags match your search.</p>
             )}
             {displayed.map((tag, i) => (
-              <div key={tag} className={cx('grid grid-cols-[1fr_80px] items-center py-2.5 px-1', i < displayed.length - 1 && 'border-b border-gray-100')}>
-                <span className="text-sm text-gray-700">{tag}</span>
+              <div key={tag.id} className={cx('grid grid-cols-[1fr_80px] items-center py-2.5 px-1', i < displayed.length - 1 && 'border-b border-gray-100')}>
+                <span className="text-sm text-gray-700">{tag.name}</span>
                 <div className="flex items-center justify-end gap-2">
                   <button type="button" title="Edit" className="text-gray-400 hover:text-primary transition-colors">
                     <Pencil size={15} />
                   </button>
-                  <button type="button" title="Delete" onClick={() => handleDeleteTag(tag)} className="text-gray-400 hover:text-destructive transition-colors">
+                  <button type="button" title="Delete" onClick={() => handleDeleteTag(tag.id)} className="text-gray-400 hover:text-destructive transition-colors">
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -1592,36 +1623,27 @@ function CurriculumTagsPage() {
 }
 
 // ─── CurriculumGlossaryPage ───────────────────────────────────────────────────
-const GLOSSARY_SEED = [
-  { id: 'g1', title: 'STCW', definition: 'Standards of Training, Certification and Watchkeeping for Seafarers' },
-  { id: 'g2', title: 'COLREG', definition: 'Convention on the International Regulations for Preventing Collisions at Sea' },
-  { id: 'g3', title: 'ECDIS', definition: 'Electronic Chart Display and Information System' },
-  { id: 'g4', title: 'GMDSS', definition: 'Global Maritime Distress and Safety System' },
-  { id: 'g5', title: 'OOW', definition: 'Officer of the Watch' },
-  { id: 'g6', title: 'SMS', definition: 'Safety Management System' },
-  { id: 'g7', title: 'ISM Code', definition: 'International Safety Management Code' },
-  { id: 'g8', title: 'MCA', definition: 'Maritime and Coastguard Agency' },
-  { id: 'g9', title: 'Subscribed Product', definition: 'A course or learning product a user is enrolled in' },
-];
-
 function CurriculumGlossaryPage() {
-  const [terms, setTerms]         = useState(GLOSSARY_SEED);
+  type Term = { id: string; title: string; definition?: string };
+  const { data: terms, loading: termsLoading, refetch: refetchTerms } = useApi<Term[]>('/curriculum/glossary');
   const [query, setQuery]         = useState('');
   const [applied, setApplied]     = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm]           = useState({ title: '', definition: '' });
 
-  const displayed = terms.filter(t => t.title.toLowerCase().includes(applied.toLowerCase()));
+  const displayed = (terms ?? []).filter(t => t.title.toLowerCase().includes(applied.toLowerCase()));
 
   function handleGo()    { setApplied(query); }
-  function handleReset() { setQuery(''); setApplied(''); }
-  function handleDelete(id: string) { setTerms(t => t.filter(x => x.id !== id)); }
-  function handleCreate(e: FormEvent) {
+  function handleReset() { setQuery(''); setApplied(''); refetchTerms(); }
+  async function handleDelete(id: string) {
+    await apiFetch(`/curriculum/glossary/${id}`, 'DELETE');
+    refetchTerms();
+  }
+  async function handleCreate(e: FormEvent) {
     e.preventDefault();
     if (!form.title.trim()) return;
-    setTerms(t => [...t, { id: `g${Date.now()}`, title: form.title.trim(), definition: form.definition.trim() }]);
-    setForm({ title: '', definition: '' });
-    setShowCreate(false);
+    await apiFetch('/curriculum/glossary', 'POST', { title: form.title.trim(), definition: form.definition.trim() });
+    setForm({ title: '', definition: '' }); setShowCreate(false); refetchTerms();
   }
 
   const filledBtn = (label: string, onClick: () => void) => (
@@ -1719,27 +1741,13 @@ function CurriculumGlossaryPage() {
 
 // ─── CurriculumUploadStatusPage ───────────────────────────────────────────────
 type UploadRecord = {
-  id: string; video: string; createdDate: string; updatedDate: string;
-  uploadStatus: 'Completed' | 'Processing' | 'Failed' | 'Pending';
-  transcodeStatus: 'Completed' | 'Processing' | 'Failed' | 'Pending';
-  type: string; user: string;
+  id: string; video: string; createdAt?: string; updatedAt?: string;
+  uploadStatus: string; transcodeStatus: string; type: string; uploadedBy: string;
 };
-const UPLOAD_SEED: UploadRecord[] = [
-  { id:'u1',  video:'STCW 2017 Searchable',                   createdDate:'18-Aug-2026 9:00:21 AM',  updatedDate:'18-Aug-2026 9:30:41 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Video',    user:'Admin' },
-  { id:'u2',  video:'Virtual Reality (VR) HIMT',              createdDate:'18-Aug-2026 9:13:12 AM',  updatedDate:'18-Aug-2026 9:28:04 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'VR/AR',    user:'Admin' },
-  { id:'u3',  video:'Augmented Reality (AR) HIMT',            createdDate:'18-Aug-2026 9:12:25 AM',  updatedDate:'18-Aug-2026 9:20:49 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'VR/AR',    user:'Admin' },
-  { id:'u4',  video:'Merchant Shipping Notice No. 07 of 2023',createdDate:'18-Aug-2026 8:59:25 AM',  updatedDate:'18-Aug-2026 9:01:11 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Document', user:'Admin' },
-  { id:'u5',  video:'Engineering Circular No. 143 of 2018',   createdDate:'18-Aug-2026 8:58:43 AM',  updatedDate:'18-Aug-2026 9:00:31 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Document', user:'Admin' },
-  { id:'u6',  video:'STCW OVERVIEW — Aug 2026',               createdDate:'8-Jul-2024 5:25:01 PM',   updatedDate:'18-Aug-2026 8:47:08 AM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Video',    user:'Faculty' },
-  { id:'u7',  video:'Bridge Simulator — GMDSS Operations',    createdDate:'11-Aug-2026 3:01:37 PM',  updatedDate:'11-Aug-2026 3:03:19 PM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Simulation',user:'Admin' },
-  { id:'u8',  video:'Session 2 — IMSBC Code 2026',            createdDate:'22-Jul-2026 10:30:02 AM', updatedDate:'7-Aug-2026 5:44:34 PM',   uploadStatus:'Completed', transcodeStatus:'Processing',type:'Video',    user:'Faculty' },
-  { id:'u9',  video:'Polar Navigation Session-1',             createdDate:'30-Jul-2026 12:05:42 PM', updatedDate:'30-Jul-2026 4:23:00 PM',  uploadStatus:'Completed', transcodeStatus:'Completed', type:'Video',    user:'Admin' },
-  { id:'u10', video:'Fire Fighting Training — Module 3',      createdDate:'15-Aug-2026 11:00:00 AM', updatedDate:'15-Aug-2026 11:45:00 AM', uploadStatus:'Processing', transcodeStatus:'Pending',  type:'Video',    user:'Faculty' },
-];
-const UPLOAD_STATUSES  = ['All', 'Completed', 'Processing', 'Failed', 'Pending'] as const;
+const UPLOAD_STATUSES    = ['All', 'Completed', 'Processing', 'Failed', 'Pending'] as const;
 const TRANSCODE_STATUSES = ['All', 'Completed', 'Processing', 'Failed', 'Pending'] as const;
-const UPLOAD_TYPES     = ['All', 'Video', 'Document', 'SCORM', 'VR/AR', 'Simulation'];
-const UPLOAD_USERS     = ['All', 'Admin', 'Faculty'];
+const UPLOAD_TYPES       = ['All', 'Video', 'Document', 'SCORM', 'VR/AR', 'Simulation'];
+const UPLOAD_USERS       = ['All', 'Admin', 'Faculty'];
 
 function uploadStatusTone(s: string) {
   if (s === 'Completed') return 'text-emerald-600';
@@ -1754,21 +1762,20 @@ function CurriculumUploadStatusPage() {
   const [type,             setType]             = useState('All');
   const [user,             setUser]             = useState('All');
   const [search,           setSearch]           = useState('');
-  const [applied,          setApplied]          = useState<Record<string,string>>({});
+  const [queryString,      setQueryString]      = useState('');
+
+  const { data: rows, loading: rowsLoading, refetch: refetchRows } = useApi<UploadRecord[]>(`/curriculum/upload-status${queryString}`, [queryString]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setApplied({ uploadStatus, transcodeStatus, type, user, search });
+    const params = new URLSearchParams();
+    if (uploadStatus !== 'All')    params.set('uploadStatus', uploadStatus);
+    if (transcodeStatus !== 'All') params.set('transcodeStatus', transcodeStatus);
+    if (type !== 'All')            params.set('type', type);
+    if (user !== 'All')            params.set('user', user);
+    if (search)                    params.set('search', search);
+    setQueryString(params.toString() ? `?${params}` : '');
   }
-
-  const rows = UPLOAD_SEED.filter(r => {
-    if (applied.uploadStatus    && applied.uploadStatus    !== 'All' && r.uploadStatus    !== applied.uploadStatus)    return false;
-    if (applied.transcodeStatus && applied.transcodeStatus !== 'All' && r.transcodeStatus !== applied.transcodeStatus) return false;
-    if (applied.type            && applied.type            !== 'All' && r.type            !== applied.type)            return false;
-    if (applied.user            && applied.user            !== 'All' && r.user            !== applied.user)            return false;
-    if (applied.search && !r.video.toLowerCase().includes(applied.search.toLowerCase())) return false;
-    return true;
-  });
 
   const selClass = "rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40";
 
@@ -1836,14 +1843,17 @@ function CurriculumUploadStatusPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.length === 0 && (
+              {rowsLoading && (
+                <tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">Loading…</td></tr>
+              )}
+              {!rowsLoading && (rows ?? []).length === 0 && (
                 <tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">No records match your filters.</td></tr>
               )}
-              {rows.map(r => (
+              {(rows ?? []).map(r => (
                 <tr key={r.id} className="hover:bg-gray-50">
                   <td className="px-5 py-3 text-gray-700">{r.video}</td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.createdDate}</td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.updatedDate}</td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.createdAt ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.updatedAt ?? '—'}</td>
                   <td className={cx('px-4 py-3 font-medium', uploadStatusTone(r.uploadStatus))}>{r.uploadStatus}</td>
                   <td className={cx('px-4 py-3 font-medium', uploadStatusTone(r.transcodeStatus))}>{r.transcodeStatus}</td>
                 </tr>
@@ -1859,17 +1869,19 @@ function CurriculumUploadStatusPage() {
 
 // ─── CurriculumOthersPage (FAQ Categories) ────────────────────────────────────
 function CurriculumOthersPage() {
-  const [categories, setCategories] = useState<string[]>([]);
+  type FaqCategory = { id: string; name: string };
+  const { data: categories, loading: catsLoading, refetch: refetchCats } = useApi<FaqCategory[]>('/curriculum/faq-categories');
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName]       = useState('');
 
-  function handleCreate(e: FormEvent) {
+  async function handleCreate(e: FormEvent) {
     e.preventDefault();
     if (!newName.trim()) return;
-    setCategories(c => [...c, newName.trim()]);
-    setNewName('');
-    setShowCreate(false);
+    await apiFetch('/curriculum/faq-categories', 'POST', { name: newName.trim() });
+    setNewName(''); setShowCreate(false); refetchCats();
   }
+
+  const cats = categories ?? [];
 
   return (
     <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background: '#eef1fb', minHeight: 'calc(100vh - 72px)' }}>
@@ -1887,7 +1899,11 @@ function CurriculumOthersPage() {
         </div>
 
         {/* Content */}
-        {categories.length === 0 ? (
+        {catsLoading ? (
+          <div className="flex items-center justify-center" style={{ minHeight: '40vh' }}>
+            <p className="text-sm text-gray-400">Loading…</p>
+          </div>
+        ) : cats.length === 0 ? (
           <div className="flex items-center justify-center" style={{ minHeight: '40vh' }}>
             <p className="text-sm text-gray-500">No data to display</p>
           </div>
@@ -1897,12 +1913,12 @@ function CurriculumOthersPage() {
               <span className="text-xs font-bold text-primary uppercase tracking-wide">Category Name</span>
               <span className="text-xs font-bold text-primary uppercase tracking-wide text-right">Actions</span>
             </div>
-            {categories.map((cat, i) => (
-              <div key={i} className={cx('grid grid-cols-[1fr_80px] items-center px-5 py-3', i < categories.length - 1 && 'border-b border-gray-100')}>
-                <span className="text-sm text-gray-700">{cat}</span>
+            {cats.map((cat, i) => (
+              <div key={cat.id} className={cx('grid grid-cols-[1fr_80px] items-center px-5 py-3', i < cats.length - 1 && 'border-b border-gray-100')}>
+                <span className="text-sm text-gray-700">{cat.name}</span>
                 <div className="flex items-center justify-end gap-2">
                   <button type="button" title="Edit"   className="text-gray-400 hover:text-primary transition-colors"><Pencil size={15} /></button>
-                  <button type="button" title="Delete" onClick={() => setCategories(c => c.filter((_, j) => j !== i))} className="text-gray-400 hover:text-destructive transition-colors"><Trash2 size={15} /></button>
+                  <button type="button" title="Delete" onClick={async () => { await apiFetch(`/curriculum/faq-categories/${cat.id}`, 'DELETE'); refetchCats(); }} className="text-gray-400 hover:text-destructive transition-colors"><Trash2 size={15} /></button>
                 </div>
               </div>
             ))}
