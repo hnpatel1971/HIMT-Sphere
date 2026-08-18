@@ -358,8 +358,274 @@ function CurriculumPage() {
   );
 }
 
-// ─── CurriculumCoursesPage (OBE outline builder) ──────────────────────────────
+// ─── CurriculumCoursesPage (Course list — TriByte style) ──────────────────────
+type CourseListItem = { id:string; name:string; group:string; language:string; adaptiveUserName:string; };
+const COURSES_LIST_SEED: CourseListItem[] = [
+  { id:'cl1', name:'ME-GI Course',                                    group:'All Content',  language:'English', adaptiveUserName:'' },
+  { id:'cl2', name:'Vertical Integration Course for Trainers – VICT', group:'All Content',  language:'English', adaptiveUserName:'' },
+  { id:'cl3', name:'Basic Safety Training (BST)',                     group:'All Content',  language:'English', adaptiveUserName:'' },
+  { id:'cl4', name:'STCW Advanced Fire Fighting',                     group:'All Content',  language:'English', adaptiveUserName:'' },
+  { id:'cl5', name:"GMDSS General Operator's Certificate",            group:'All Content',  language:'English', adaptiveUserName:'' },
+  { id:'cl6', name:'Bridge Resource Management (BRM)',                group:'All Content',  language:'English', adaptiveUserName:'' },
+  { id:'cl7', name:'Engine Room Simulator Training',                  group:'Engineering',  language:'English', adaptiveUserName:'' },
+  { id:'cl8', name:'STCW 2017 Maritime Safety',                       group:'All Content',  language:'English', adaptiveUserName:'' },
+];
+const THUMB_COLORS = ['#1a5c3a','#0d4f7c','#4a2b6b','#7c3a1a','#1a5c5c','#2b4a1a','#4a1a2b','#1a3a5c'];
+
+function CourseImportModal({ onClose, onImport }: { onClose:()=>void; onImport:(rows:CourseListItem[])=>void }) {
+  const [step, setStep]   = useState<1|2|3>(1);
+  const [parsed, setParsed] = useState<CourseListItem[]>([]);
+  const [error, setError] = useState('');
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const text = ev.target?.result as string;
+        const lines = text.trim().split('\n').filter(l => l.trim());
+        const start = lines[0].toLowerCase().includes('course_name') ? 1 : 0;
+        const rows: CourseListItem[] = lines.slice(start).map((line, i) => {
+          const c = line.split(',').map(x => x.trim().replace(/^"|"$/g,''));
+          return { id:`csv-${Date.now()}-${i}`, name:c[0]||'', adaptiveUserName:c[1]||'', group:c[2]||'All Content', language:c[3]||'English' };
+        }).filter(r => r.name);
+        if (!rows.length) { setError('No valid rows found. Please use the CSV template.'); return; }
+        setParsed(rows); setError(''); setStep(2);
+      } catch { setError('Could not parse file. Please use the CSV template.'); }
+    };
+    reader.readAsText(file);
+  }
+
+  function downloadTemplate() {
+    const csv = 'course_name,adaptive_user_name,group,language\nME-GI Course,,All Content,English\nBasic Safety Training (BST),,All Content,English\n';
+    const a = document.createElement('a');
+    a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+    a.download = 'courses_import_template.csv'; a.click();
+  }
+
+  function confirmImport() { onImport(parsed); setStep(3); setTimeout(onClose, 1500); }
+
+  return (
+    <Modal title="Import Courses" onClose={onClose}>
+      {step === 1 && (
+        <div className="space-y-5">
+          <p className="text-sm text-gray-600">Upload a CSV file with your courses. Download the template for the expected column format.</p>
+          <button type="button" onClick={downloadTemplate}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+            <Download size={13} /> Download CSV template
+          </button>
+          <div className="rounded-lg border-2 border-dashed border-gray-200 p-10 text-center">
+            <FileUp size={30} className="mx-auto mb-3 text-gray-300" />
+            <p className="mb-4 text-sm text-gray-500">Choose a CSV file to upload</p>
+            <label className="cursor-pointer rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+              Browse file
+              <input type="file" accept=".csv,.txt" className="hidden" onChange={handleFile} />
+            </label>
+          </div>
+          {error && <p className="text-sm text-red-500">{error}</p>}
+          <p className="text-xs text-gray-400">Columns: course_name, adaptive_user_name, group, language</p>
+        </div>
+      )}
+      {step === 2 && (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600"><strong>{parsed.length}</strong> course{parsed.length !== 1 ? 's' : ''} found. Review before importing.</p>
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-gray-100">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-primary">#</th>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-primary">Course Name</th>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-primary">Group</th>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-primary">Language</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {parsed.map((r,i) => (
+                  <tr key={r.id} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-400 text-xs">{i+1}</td>
+                    <td className="px-3 py-2 text-gray-700">{r.name}</td>
+                    <td className="px-3 py-2 text-gray-500">{r.group}</td>
+                    <td className="px-3 py-2 text-gray-500">{r.language}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setStep(1)} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">← Back</button>
+            <button onClick={confirmImport} className="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+              Import {parsed.length} course{parsed.length !== 1 ? 's' : ''}
+            </button>
+          </div>
+        </div>
+      )}
+      {step === 3 && (
+        <div className="py-10 text-center space-y-3">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+            <Check size={24} className="text-emerald-600" />
+          </div>
+          <p className="font-semibold text-gray-800">Import successful!</p>
+          <p className="text-sm text-gray-500">{parsed.length} course{parsed.length !== 1 ? 's' : ''} added.</p>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function CurriculumCoursesPage() {
+  const [courses,  setCourses]  = useState<CourseListItem[]>(COURSES_LIST_SEED);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search,   setSearch]   = useState('');
+  const [adaptive, setAdaptive] = useState('');
+  const [group,    setGroup]    = useState('');
+  const [lang,     setLang]     = useState('English');
+  const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [newName,    setNewName]    = useState('');
+  const [newGroup,   setNewGroup]   = useState('All Content');
+  const [newLang,    setNewLang]    = useState('English');
+
+  const filtered = courses.filter(c => {
+    if (search   && !c.name.toLowerCase().includes(search.toLowerCase()))   return false;
+    if (adaptive && !c.adaptiveUserName.toLowerCase().includes(adaptive.toLowerCase())) return false;
+    if (group    && !c.group.toLowerCase().includes(group.toLowerCase()))   return false;
+    if (lang && lang !== 'All' && c.language !== lang) return false;
+    return true;
+  });
+
+  function toggleSelect(id: string) {
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+  function handleDeleteSelected() { setCourses(c => c.filter(r => !selected.has(r.id))); setSelected(new Set()); }
+  function handleCreate(e: FormEvent) {
+    e.preventDefault(); if (!newName.trim()) return;
+    setCourses(c => [...c, { id:`cl-${Date.now()}`, name:newName.trim(), group:newGroup, language:newLang, adaptiveUserName:'' }]);
+    setNewName(''); setShowCreate(false);
+  }
+
+  const btn = "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors whitespace-nowrap";
+  const inp = "rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 w-full";
+
+  return (
+    <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background:'#eef1fb', minHeight:'calc(100vh - 72px)' }}>
+      <div className="p-8 lg:p-10 space-y-5">
+
+        {/* Back link + toolbar */}
+        <div className="flex items-center justify-between">
+          <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
+            <ChevronLeft size={18} /> Courses
+          </Link>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowCreate(true)} className={btn}><Scissors size={13}/> Create</button>
+            <button onClick={handleDeleteSelected} disabled={selected.size === 0}
+              className={cx(btn, selected.size === 0 && 'opacity-40 cursor-not-allowed')}>
+              <Trash2 size={13}/> Delete
+            </button>
+            <button onClick={() => setShowImport(true)} className={btn}><FileUp size={13}/> Import</button>
+          </div>
+        </div>
+
+        {/* Filter card */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-700">Search</p>
+              <div className="relative">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by Name" className={cx(inp,'pl-8')}/>
+              </div>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-700">Adaptive User Name</p>
+              <input value={adaptive} onChange={e => setAdaptive(e.target.value)} placeholder="Type Here" className={inp}/>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-700">Group</p>
+              <input value={group} onChange={e => setGroup(e.target.value)} placeholder="Type Here" className={inp}/>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-gray-700">Language</p>
+              <select value={lang} onChange={e => setLang(e.target.value)} className={inp}>
+                {['All','English','Hindi','Marathi'].map(l=><option key={l}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Course cards */}
+        <div className="space-y-4">
+          {filtered.length === 0 && (
+            <div className="flex items-center justify-center rounded-xl bg-white border border-gray-100 shadow-xs py-20">
+              <p className="text-sm text-gray-400">No courses match your filters.</p>
+            </div>
+          )}
+          {filtered.map((course, idx) => (
+            <div key={course.id} className="relative flex items-center gap-5 rounded-xl bg-white border border-gray-100 shadow-xs p-4">
+              <input type="checkbox" checked={selected.has(course.id)} onChange={() => toggleSelect(course.id)}
+                className="absolute right-4 top-4 h-4 w-4 accent-primary cursor-pointer"/>
+
+              {/* Chalkboard thumbnail */}
+              <div className="shrink-0 h-24 w-32 rounded-lg flex items-center justify-center relative overflow-hidden"
+                style={{ background: THUMB_COLORS[idx % THUMB_COLORS.length] }}>
+                <div className="absolute inset-1.5 rounded border-2 border-white/20"/>
+                <GraduationCap size={34} className="text-white/80"/>
+              </div>
+
+              {/* Course name + meta */}
+              <div className="flex-1 min-w-0 pr-8">
+                <p className="text-base font-semibold text-gray-800 leading-snug">{course.name}</p>
+                <p className="mt-1 text-xs text-gray-400">{course.group} · {course.language}</p>
+              </div>
+
+              {/* 3 × 2 action buttons */}
+              <div className="shrink-0 grid grid-cols-3 gap-2">
+                <button className={btn}><Pencil size={12}/> Edit</button>
+                <button className={btn}><Sparkles size={12}/> Generate Concepts</button>
+                <button className={btn}><TrendingUp size={12}/> Progress</button>
+                <button className={btn}><Layers size={12}/> Course Structure</button>
+                <button className={btn}><Users size={12}/> DASH Actions</button>
+                <button className={btn}><MoreHorizontal size={12}/> Others</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Create modal */}
+      {showCreate && (
+        <Modal title="Create Course" onClose={() => setShowCreate(false)}>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <Field label="Course name">
+              <input required autoFocus data-testid="input-course-list-name"
+                value={newName} onChange={e => setNewName(e.target.value)}
+                placeholder="e.g. STCW Advanced Fire Fighting" className="form-input"/>
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Group">
+                <input value={newGroup} onChange={e => setNewGroup(e.target.value)} className="form-input" data-testid="input-course-group"/>
+              </Field>
+              <Field label="Language">
+                <select value={newLang} onChange={e => setNewLang(e.target.value)} className="form-input" data-testid="select-course-lang">
+                  {['English','Hindi','Marathi'].map(l=><option key={l}>{l}</option>)}
+                </select>
+              </Field>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-create-course" variant="quiet" onClick={() => setShowCreate(false)}>Cancel</Button>
+              <Button testId="button-submit-create-course" type="submit">Create</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Import modal */}
+      {showImport && <CourseImportModal onClose={() => setShowImport(false)} onImport={rows => setCourses(c => [...c, ...rows])}/>}
+    </div>
+  );
+}
+
+// ─── CourseOBEPage (OBE outline builder — kept for Course Structure flow) ───────
+function CourseOBEPage() {
   const [selectedProgrammeId, setSelectedProgrammeId] = useState('prog-btme');
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>('cur-brm501');
   const [activeTab, setActiveTab] = useState<'overview' | 'structure' | 'mapping'>('overview');
