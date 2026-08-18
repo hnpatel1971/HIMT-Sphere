@@ -75,6 +75,21 @@ function niceDate(value: string | null | undefined) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatUploadDate(value: string | null | undefined): string {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value ?? '—';
+  const day   = d.getDate();
+  const mon   = MONTHS_SHORT[d.getMonth()];
+  const year  = d.getFullYear();
+  const hours = d.getHours();
+  const mins  = String(d.getMinutes()).padStart(2, '0');
+  const secs  = String(d.getSeconds()).padStart(2, '0');
+  const ampm  = hours < 12 ? 'AM' : 'PM';
+  const h12   = hours % 12 || 12;
+  return `${day}-${mon}-${year} ${h12}:${mins}:${secs} ${ampm}`;
+}
 function initials(name = 'HIMT') { return name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase(); }
 function statusTone(status = '') {
   const s = status.toLowerCase();
@@ -1880,8 +1895,8 @@ function CurriculumUploadStatusPage() {
               {(rows ?? []).map(r => (
                 <tr key={r.id} className="hover:bg-gray-50">
                   <td className="px-5 py-3 text-gray-700">{r.video}</td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.createdAt ?? '—'}</td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.updatedAt ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatUploadDate(r.createdAt)}</td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatUploadDate(r.updatedAt)}</td>
                   <td className={cx('px-4 py-3 font-medium', uploadStatusTone(r.uploadStatus))}>{r.uploadStatus}</td>
                   <td className={cx('px-4 py-3 font-medium', uploadStatusTone(r.transcodeStatus))}>{r.transcodeStatus}</td>
                 </tr>
