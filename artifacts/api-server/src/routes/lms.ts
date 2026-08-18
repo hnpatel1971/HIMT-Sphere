@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import "express-session"; // ensure SessionData augmentation from auth.ts is loaded
 import { eq, ilike, or } from "drizzle-orm";
 import { db } from "@workspace/db";
 import {
@@ -984,6 +985,211 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
       topics: topicRows,
     });
   } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// ─── Sync courses from TriByte ────────────────────────────────────────────────
+
+/**
+ * Middleware: require an active authenticated admin session.
+ * Sessions are established via POST /api/auth/login.
+ */
+function requireAdmin(
+  req: import("express").Request,
+  res: import("express").Response,
+  next: import("express").NextFunction,
+) {
+  if (req.session.isAdmin === true) { next(); return; }
+  res.status(401).json({ error: "Unauthorized — admin login required" });
+}
+
+/**
+ * POST /api/curriculum/sync-tribyte
+ *
+ * Protected by requireAdmin (session cookie set via POST /api/auth/login).
+ *
+ * Scrapes the full course list from TriByte and upserts every course into the
+ * curriculum_courses table (adds new ones, updates names/thumbnails of changed
+ * ones, leaves all other data intact).
+ *
+ * TriByte credential strategies tried in order; each failure moves to the next:
+ *   1. TRIBYTE_SESSION env var — raw Cookie header string (fastest)
+ *   2. TRIBYTE_USERNAME + TRIBYTE_PASSWORD — Drupal form login → session cookies
+ *
+ * If NO TriByte credentials are configured at all, falls back to the embedded
+ * TRIBYTE_COURSES static list (development/demo mode — clearly flagged in the
+ * response as usedStaticFallback).  If credentials ARE configured but ALL
+ * strategies fail, the endpoint returns 502 with the error details rather than
+ * silently falling back to stale data.
+ */
+router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
+  const TB_BASE = "https://admin.learn.himtelearning.com";
+
+  interface ScrapedCourse { nid: string; tid: string; name: string; thumbUrl: string; }
+
+  // ── Detect a TriByte login-redirect page (session expired / bad cookie) ──
+  function isLoginPage(html: string): boolean {
+    return html.includes("user/login") && html.includes("form_build_id");
+  }
+
+  // ── Parse all course cards from one page of /reviewer/course/list ──
+  function parseCoursePage(html: string): ScrapedCourse[] {
+    const results: ScrapedCourse[] = [];
+    const cardRe = /<li[^>]*class="[^"]*views-row[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
+    let m: RegExpExecArray | null;
+    while ((m = cardRe.exec(html)) !== null) {
+      const inner = m[1];
+      const nidM  = inner.match(/\/node\/(\d+)\/edit\/course/);
+      const tidM  = inner.match(/cat_tid=(\d+)/) || inner.match(/cat=(\d+)/);
+      const nameM = inner.match(/class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/(?:span|div|h\d|a)>/)
+                 || inner.match(/<h\d[^>]*>([\s\S]*?)<\/h\d>/);
+      const thumbM = inner.match(/src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|gif|webp)[^"]*)"/i)
+                  || inner.match(/src="([^"]*static[^"]+)"/i);
+      if (nidM && tidM) {
+        results.push({
+          nid:      nidM[1],
+          tid:      tidM[1],
+          name:     nameM ? cleanHtml(nameM[1]) : `Course ${nidM[1]}`,
+          thumbUrl: thumbM?.[1] ?? "",
+        });
+      }
+    }
+    return results;
+  }
+
+  // 30-second timeout per TriByte request so an unresponsive server cannot leave
+  // the sync handler pending indefinitely.
+  const FETCH_TIMEOUT_MS = 30_000;
+
+  // ── Scrape all paginated pages of /reviewer/course/list ──
+  async function scrapeAllCourses(cookieHeader: string): Promise<ScrapedCourse[]> {
+    const all: ScrapedCourse[] = [];
+    for (let page = 0; page <= 20; page++) {
+      const url = `${TB_BASE}/reviewer/course/list${page > 0 ? `?page=${page}` : ""}`;
+      const r   = await fetch(url, {
+        signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { Cookie: cookieHeader, "User-Agent": "Mozilla/5.0" },
+      });
+      if (!r.ok) throw new Error(`TriByte responded ${r.status} on page ${page}`);
+      const html = await r.text();
+      if (isLoginPage(html)) throw new Error("TriByte session has expired or is invalid");
+      const rows = parseCoursePage(html);
+      if (rows.length === 0) break;
+      all.push(...rows);
+      if (rows.length < 16) break; // last page — TriByte shows ~16 per page
+    }
+    return all;
+  }
+
+  // ── Log into TriByte via Drupal form, return session cookie string ──
+  async function loginToTriByte(tbUser: string, tbPass: string): Promise<string> {
+    const loginPageRes = await fetch(`${TB_BASE}/user/login`, {
+      signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    const loginHtml  = await loginPageRes.text();
+    const fbidMatch  = loginHtml.match(/name="form_build_id"\s+value="([^"]+)"/);
+    if (!fbidMatch) throw new Error("Could not find form_build_id on TriByte login page");
+
+    const body = new URLSearchParams({
+      name: tbUser, pass: tbPass,
+      form_build_id: fbidMatch[1], form_id: "user_login", op: "Log in",
+    });
+    const loginRes = await fetch(`${TB_BASE}/user/login?destination=reviewer/course/list`, {
+      method:  "POST",
+      signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+      body:    body.toString(),
+      redirect: "manual",
+    });
+    const rawCookies = loginRes.headers.get("set-cookie") ?? "";
+    if (!rawCookies) throw new Error("TriByte login did not return cookies — check credentials");
+    return rawCookies.split(/,(?=[^ ])/).map(c => c.split(";")[0].trim()).join("; ");
+  }
+
+  // ── Determine whether any TriByte credential variable is set ──
+  // Any nonempty credential env var counts as "configured"; a partial set that
+  // cannot form a complete strategy fails closed (502) rather than falling back
+  // to static data — the operator must notice the misconfiguration.
+  const hasTribyteCreds =
+    Boolean(process.env.TRIBYTE_SESSION) ||
+    Boolean(process.env.TRIBYTE_USERNAME) ||
+    Boolean(process.env.TRIBYTE_PASSWORD);
+
+  let scraped: ScrapedCourse[] | null = null;
+  const errors: string[] = [];
+  let usedStaticFallback = false;
+
+  // Strategy 1: TRIBYTE_SESSION env var
+  const sessionCookie = process.env.TRIBYTE_SESSION;
+  if (sessionCookie && !scraped) {
+    try { scraped = await scrapeAllCourses(sessionCookie); }
+    catch (e) { errors.push(`TRIBYTE_SESSION: ${String(e)}`); }
+  }
+
+  // Strategy 2: TRIBYTE_USERNAME + TRIBYTE_PASSWORD (both required; partial set is
+  // flagged as a configuration error rather than silently skipped).
+  const tbUser = process.env.TRIBYTE_USERNAME;
+  const tbPass = process.env.TRIBYTE_PASSWORD;
+  if (!scraped) {
+    if (tbUser && tbPass) {
+      try {
+        const cookie = await loginToTriByte(tbUser, tbPass);
+        scraped = await scrapeAllCourses(cookie);
+      } catch (e) { errors.push(`TRIBYTE_USERNAME/PASSWORD: ${String(e)}`); }
+    } else if (tbUser || tbPass) {
+      errors.push(
+        "TRIBYTE_USERNAME/PASSWORD: only one of the two env vars is set — both are required",
+      );
+    }
+  }
+
+  // If any TriByte credential is configured but all strategies failed → error.
+  // Never silently fall back to stale static data in this case.
+  if (hasTribyteCreds && !scraped) {
+    res.status(502).json({
+      error: "All TriByte credential strategies failed — could not sync",
+      strategyErrors: errors,
+    });
+    return;
+  }
+
+  // No credentials configured → development/demo mode: upsert embedded static list.
+  if (!scraped) {
+    usedStaticFallback = true;
+    scraped = TRIBYTE_COURSES.map(c => ({
+      nid: c.tribyteNid, tid: c.tribyteTid, name: c.name, thumbUrl: c.thumbUrl,
+    }));
+  }
+
+  try {
+    const existing = await db.select().from(curriculumCoursesTable);
+    const byNid    = new Map(existing.map(r => [r.tribyteNid ?? "", r]));
+    let added = 0, updated = 0;
+
+    for (const course of scraped) {
+      const row = byNid.get(course.nid);
+      if (row) {
+        if (row.name !== course.name || (row.thumbUrl ?? "") !== course.thumbUrl) {
+          await db.update(curriculumCoursesTable)
+            .set({ name: course.name, thumbUrl: course.thumbUrl })
+            .where(eq(curriculumCoursesTable.id, row.id));
+          updated++;
+        }
+      } else {
+        await db.insert(curriculumCoursesTable).values({
+          id: `tb-${course.nid}`, name: course.name,
+          groupName: "All Content", language: "English", adaptiveUserName: "",
+          status: "Published", appliedTags: [],
+          tribyteNid: course.nid, tribyteTid: course.tid, thumbUrl: course.thumbUrl,
+        }).onConflictDoNothing();
+        added++;
+      }
+    }
+
+    res.json({ added, updated, total: scraped.length, usedStaticFallback, strategyErrors: errors });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 // ─── User import ──────────────────────────────────────────────────────────────

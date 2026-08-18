@@ -1,10 +1,25 @@
 import express, { type Express } from "express";
 import cors from "cors";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import pinoHttp from "pino-http";
+import { pool } from "@workspace/db";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
+const sessionSecret = process.env.SESSION_SECRET;
+if (!sessionSecret) {
+  throw new Error("SESSION_SECRET env var is required — set it in Replit Secrets");
+}
+
+const PgSession = connectPgSimple(session);
+
 const app: Express = express();
+
+// Trust the HTTPS-terminating proxy in front of this service (Replit deployment
+// proxy, nginx, etc.).  Without this, Express sees HTTP on the upstream connection
+// and express-session will not emit the `secure` session cookie in production.
+app.set("trust proxy", 1);
 
 app.use(
   pinoHttp({
@@ -25,9 +40,28 @@ app.use(
     },
   }),
 );
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.use(
+  session({
+    store: new PgSession({
+      pool,
+      tableName: "user_sessions",
+      createTableIfMissing: true,
+    }),
+    secret: sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 8 * 60 * 60 * 1000, // 8 hours
+    },
+  }),
+);
 
 app.use("/api", router);
 

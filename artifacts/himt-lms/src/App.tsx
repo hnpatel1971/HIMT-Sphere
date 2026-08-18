@@ -2,10 +2,10 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from
 
 // ─── Shared API helpers ───────────────────────────────────────────────────────
 const API = '/api';
-async function apiFetch<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
+async function apiFetch<T = unknown>(path: string, method = 'GET', body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
   const r = await fetch(`${API}${path}`, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...extraHeaders },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) throw new Error(await r.text());
@@ -532,6 +532,68 @@ function CurriculumCoursesPage() {
   const [group,      setGroup]      = useState('');
   const [lang,       setLang]       = useState('English');
 
+  // ── Admin auth state (session cookie established via POST /api/auth/login) ──
+  const [isAdmin,       setIsAdmin]       = useState<boolean | null>(null); // null = unknown
+  const [showLogin,     setShowLogin]     = useState(false);
+  const [loginUser,     setLoginUser]     = useState('');
+  const [loginPass,     setLoginPass]     = useState('');
+  const [loginBusy,     setLoginBusy]     = useState(false);
+  const [loginError,    setLoginError]    = useState('');
+  const [pendingSync,   setPendingSync]   = useState(false); // run sync after login succeeds
+
+  // Check session status once on mount
+  useEffect(() => {
+    apiFetch<{ isAdmin: boolean }>('/auth/status')
+      .then(r => setIsAdmin(r.isAdmin))
+      .catch(() => setIsAdmin(false));
+  }, []);
+
+  async function handleAdminLogin(e: FormEvent) {
+    e.preventDefault();
+    setLoginBusy(true); setLoginError('');
+    try {
+      await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
+      setIsAdmin(true); setShowLogin(false); setLoginUser(''); setLoginPass('');
+      if (pendingSync) { setPendingSync(false); void runSync(); }
+    } catch (err) {
+      setLoginError(String(err).replace(/^Error:\s*/, ''));
+    } finally { setLoginBusy(false); }
+  }
+
+  // ── Sync state ────────────────────────────────────────────────────────────
+  const [syncing, setSyncing] = useState(false);
+
+  async function runSync() {
+    setSyncing(true);
+    try {
+      const result = await apiFetch<{ added: number; updated: number; total: number; usedStaticFallback: boolean }>(
+        '/curriculum/sync-tribyte', 'POST',
+      );
+      const parts: string[] = [];
+      if (result.added   > 0) parts.push(`${result.added} new course${result.added   !== 1 ? 's' : ''} added`);
+      if (result.updated > 0) parts.push(`${result.updated} updated`);
+      if (parts.length === 0) parts.push('Already up to date');
+      toast({
+        title:       'Sync complete',
+        description: parts.join(' · ') + (result.usedStaticFallback ? ' (static data — configure TriByte credentials for live sync)' : ''),
+      });
+      refetchCourses();
+    } catch (err) {
+      const msg = String(err);
+      // Session expired → prompt for re-login
+      if (msg.includes('401') || msg.includes('Unauthorized')) {
+        setIsAdmin(false); setShowLogin(true); setPendingSync(true);
+      } else {
+        toast({ title: 'Sync failed', description: msg, variant: 'destructive' });
+      }
+    } finally { setSyncing(false); }
+  }
+
+  function handleSyncTriByte() {
+    if (!isAdmin) { setShowLogin(true); setPendingSync(true); return; }
+    void runSync();
+  }
+
   // ── Modal/menu state ──────────────────────────────────────────────────────
   const [showCreate,    setShowCreate]    = useState(false);
   const [showImport,    setShowImport]    = useState(false);
@@ -626,6 +688,13 @@ function CurriculumCoursesPage() {
               <Trash2 size={13}/> Delete
             </button>
             <button onClick={() => setShowImport(true)} className={btn}><FileUp size={13}/> Import</button>
+            <button
+              data-testid="button-sync-tribyte"
+              onClick={handleSyncTriByte}
+              disabled={syncing}
+              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', syncing && 'opacity-60 cursor-not-allowed')}>
+              <RefreshCw size={13} className={syncing ? 'animate-spin' : ''}/> {syncing ? 'Syncing…' : 'Sync from TriByte'}
+            </button>
           </div>
         </div>
 
@@ -857,6 +926,35 @@ function CurriculumCoursesPage() {
               <Button testId="button-save-concepts" onClick={saveConceptTags}>Save concepts</Button>
             </div>
           </div>
+        </Modal>
+      )}
+
+      {/* ── Admin login modal (for Sync from TriByte) ── */}
+      {showLogin && (
+        <Modal title="Admin login" onClose={() => { setShowLogin(false); setPendingSync(false); setLoginError(''); }}>
+          <p className="mb-4 text-sm text-gray-500">Enter your LMS admin credentials to continue.</p>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <Field label="Username">
+              <input required autoFocus data-testid="input-admin-username"
+                value={loginUser} onChange={e => setLoginUser(e.target.value)}
+                placeholder="admin" className="form-input" autoComplete="username"/>
+            </Field>
+            <Field label="Password">
+              <input required type="password" data-testid="input-admin-password"
+                value={loginPass} onChange={e => setLoginPass(e.target.value)}
+                className="form-input" autoComplete="current-password"/>
+            </Field>
+            {loginError && <p className="text-sm text-red-600">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-admin-login" variant="quiet"
+                onClick={() => { setShowLogin(false); setPendingSync(false); setLoginError(''); }}>
+                Cancel
+              </Button>
+              <Button testId="button-submit-admin-login" type="submit" disabled={loginBusy}>
+                {loginBusy ? 'Signing in…' : 'Sign in'}
+              </Button>
+            </div>
+          </form>
         </Modal>
       )}
 
