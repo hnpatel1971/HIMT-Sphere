@@ -2120,7 +2120,9 @@ type ResourceImportResult = {
 };
 
 const activeResourceImportRunners = new Set<string>();
-const MAX_RESOURCE_BYTES = 500 * 1024 * 1024;
+// Training recordings can be substantially larger than ordinary documents.
+// Retain a hard ceiling while permitting catalogue recordings to migrate.
+const MAX_RESOURCE_BYTES = 5 * 1024 * 1024 * 1024;
 const TRIBYTE_RESOURCE_HOSTS = new Set([
   "admin.learn.himtelearning.com",
   "static.learn.himtelearning.com",
@@ -2435,7 +2437,7 @@ async function migrateTriByteResource(
     }
     const contentLength = Number(response.headers.get("content-length") ?? "0");
     if (Number.isFinite(contentLength) && contentLength > MAX_RESOURCE_BYTES) {
-      throw new Error("Source file exceeds the 500 MB migration limit");
+      throw new Error("Source file exceeds the 5 GB migration limit");
     }
 
     const objectPath = resourceObjectPath(`${course.id}/${stableResourceId(sourceIdentity)}/${resource.fileName || "resource"}`);

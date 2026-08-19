@@ -20,6 +20,13 @@ export const resourceStorageClient = new Storage({
   projectId: "",
 });
 
+function formatResourceLimit(maxBytes: number): string {
+  const gigabytes = maxBytes / (1024 * 1024 * 1024);
+  if (Number.isInteger(gigabytes)) return `${gigabytes} GB`;
+  const megabytes = maxBytes / (1024 * 1024);
+  return `${Math.floor(megabytes)} MB`;
+}
+
 function privateObjectDir(): string {
   const value = process.env.PRIVATE_OBJECT_DIR ?? "";
   if (!value) throw new Error("PRIVATE_OBJECT_DIR is not configured");
@@ -57,7 +64,7 @@ export async function storeResourceStream(
       hash.update(data);
       sizeBytes += data.length;
       if (sizeBytes > maxBytes) {
-        callback(new Error(`Resource exceeds the ${Math.floor(maxBytes / (1024 * 1024))} MB migration limit`));
+        callback(new Error(`Resource exceeds the ${formatResourceLimit(maxBytes)} migration limit`));
         return;
       }
       callback(null, data);
