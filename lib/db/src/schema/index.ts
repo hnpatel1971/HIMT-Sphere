@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, bigint, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 
 // ─── Curriculum management ────────────────────────────────────────────────────
 
@@ -261,7 +261,8 @@ export const courseResources = pgTable("course_resources", {
   resourceType:    text("resource_type").notNull().default("Learning resource"),
   mimeType:        text("mime_type").default(""),
   fileName:        text("file_name").default(""),
-  sizeBytes:       integer("size_bytes"),
+  // Training recordings can exceed PostgreSQL's 2 GB integer limit.
+  sizeBytes:       bigint("size_bytes", { mode: "number" }),
   order:           integer("order").default(0),
   status:          text("status").notNull().default("pending"), // pending | ready | failed | unsupported
   storagePath:     text("storage_path"),               // /objects/… path in App Storage

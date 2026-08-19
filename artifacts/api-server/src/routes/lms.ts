@@ -8,6 +8,7 @@ import { db, pool } from "@workspace/db";
 import { parseTriByteCoursePage, type TriByteScrapedCourse } from "../lib/tribyte-course-parser";
 import { parseTriByteResources, type ParsedTriByteResource } from "../lib/tribyte-resource-parser";
 import { getStoredResource, resourceObjectPath, storeResourceStream } from "../lib/resource-storage";
+import { inspectStoredResource } from "../lib/resource-recovery";
 import {
   courses as coursesTable,
   assignments as assignmentsTable,
@@ -2419,6 +2420,25 @@ async function migrateTriByteResource(
     return "failed";
   }
 
+  const objectPath = resourceObjectPath(`${course.id}/${stableResourceId(sourceIdentity)}/${resource.fileName || "resource"}`);
+  // A previous transfer can complete while its follow-up database write fails
+  // (for example, after an interrupted process). Reuse that private object
+  // instead of downloading a potentially multi-gigabyte recording again.
+  const stored = await inspectStoredResource(objectPath, getStoredResource);
+  if (stored) {
+    const mimeType = resourceMimeFromName(resource.fileName, stored.contentType);
+    await db.update(courseResourcesTable).set({
+      status: "ready",
+      storagePath: objectPath,
+      mimeType,
+      sizeBytes: stored.sizeBytes,
+      checksum: existing?.checksum ?? null,
+      error: null,
+      updatedAt: new Date(),
+    }).where(eq(courseResourcesTable.id, id));
+    return "imported";
+  }
+
   try {
     const response = await fetchApprovedResource(resource.sourceUrl, session);
     if (!response.ok) throw new Error(`Source file responded ${response.status}`);
@@ -2432,7 +2452,6 @@ async function migrateTriByteResource(
       }).where(eq(courseResourcesTable.id, id));
       return "failed";
     }
-    const objectPath = resourceObjectPath(`${course.id}/${stableResourceId(sourceIdentity)}/${resource.fileName || "resource"}`);
     const stored = await storeResourceStream(
       objectPath,
       response.body,

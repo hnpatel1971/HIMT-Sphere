@@ -11,8 +11,8 @@ Run the full course-structure migration before a resource migration so every ava
 
 ## Large-file transfer policy
 
-TriByte resource migrations allow files up to **5 GB**. Files over that limit must remain blocked and reported as a safety failure.
+TriByte resource migrations have **no application-level size ceiling**. File sizes are stored as PostgreSQL `bigint` values, and a completed private-object upload can be registered on a later retry without downloading it again.
 
-**Why:** HIMT asked for the complete catalogue to migrate, including recordings that exceeded the original 500 MB guard. A 5 GB ceiling admits those recordings while retaining a finite storage and transfer boundary.
+**Why:** HIMT chose catalogue completeness over a transfer cap. The former integer file-size field could not record uploads over roughly 2 GB even after their streams finished, so resilient retries must preserve and reuse completed objects.
 
-**How to apply:** Keep the header-based preflight check and the streamed-byte guard aligned at 5 GB. When changing the limit, retry only failed or pending course-import items so already-ready objects are not needlessly transferred again.
+**How to apply:** Do not add header or streamed-byte limits. Preserve `bigint` storage for resource sizes. When retrying, process only failed or pending course items; a deterministic existing private object should be registered as ready rather than fetched a second time.
