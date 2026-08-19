@@ -3,6 +3,7 @@ import "express-session"; // ensure SessionData augmentation from auth.ts is loa
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
 import { eq, ilike, or } from "drizzle-orm";
 import { db, pool } from "@workspace/db";
+import { parseTriByteCoursePage, type TriByteScrapedCourse } from "../lib/tribyte-course-parser";
 import {
   courses as coursesTable,
   assignments as assignmentsTable,
@@ -1143,7 +1144,12 @@ const FETCH_TIMEOUT_MS = 30_000;
 
 /** Detect a TriByte login-redirect page (session expired / bad cookie). */
 function isTBLoginPage(html: string): boolean {
-  return html.includes("user/login") && html.includes("form_build_id");
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+    ?.replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return title === "User account | HIMT"
+    && /<form\b[^>]*\bid=["']user-login["']/i.test(html);
 }
 
 /** Log into TriByte via Drupal form; returns a Cookie header string. */
@@ -1380,36 +1386,9 @@ function requireAdmin(
  * silently falling back to stale data.
  */
 router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
-  interface ScrapedCourse { nid: string; tid: string; name: string; thumbUrl: string; }
-
-  // ── Parse all course cards from one page of /reviewer/course/list ──
-  function parseCoursePage(html: string): ScrapedCourse[] {
-    const results: ScrapedCourse[] = [];
-    const cardRe = /<li[^>]*class="[^"]*views-row[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
-    let m: RegExpExecArray | null;
-    while ((m = cardRe.exec(html)) !== null) {
-      const inner = m[1];
-      const nidM  = inner.match(/\/node\/(\d+)\/edit\/course/);
-      const tidM  = inner.match(/cat_tid=(\d+)/) || inner.match(/cat=(\d+)/);
-      const nameM = inner.match(/class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/(?:span|div|h\d|a)>/)
-                 || inner.match(/<h\d[^>]*>([\s\S]*?)<\/h\d>/);
-      const thumbM = inner.match(/src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|gif|webp)[^"]*)"/i)
-                  || inner.match(/src="([^"]*static[^"]+)"/i);
-      if (nidM && tidM) {
-        results.push({
-          nid:      nidM[1],
-          tid:      tidM[1],
-          name:     nameM ? cleanHtml(nameM[1]) : `Course ${nidM[1]}`,
-          thumbUrl: thumbM?.[1] ?? "",
-        });
-      }
-    }
-    return results;
-  }
-
   // ── Scrape all paginated pages of /reviewer/course/list ──
-  async function scrapeAllCourses(cookieHeader: string): Promise<ScrapedCourse[]> {
-    const all: ScrapedCourse[] = [];
+  async function scrapeAllCourses(cookieHeader: string): Promise<TriByteScrapedCourse[]> {
+    const all: TriByteScrapedCourse[] = [];
     for (let page = 0; page <= 20; page++) {
       const url = `${TB_BASE_URL}/reviewer/course/list${page > 0 ? `?page=${page}` : ""}`;
       const r   = await fetch(url, {
@@ -1419,8 +1398,11 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
       if (!r.ok) throw new Error(`TriByte responded ${r.status} on page ${page}`);
       const html = await r.text();
       if (isTBLoginPage(html)) throw new Error("TriByte session has expired or is invalid");
-      const rows = parseCoursePage(html);
-      if (rows.length === 0) break;
+      const rows = parseTriByteCoursePage(html);
+      if (rows.length === 0) {
+        if (page === 0) throw new Error("TriByte course list contained no recognizable course cards");
+        break;
+      }
       all.push(...rows);
       if (rows.length < 16) break; // last page — TriByte shows ~16 per page
     }
@@ -1433,7 +1415,7 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
   // falling back to static data — the operator must notice the misconfiguration.
   const hasTribyteCreds = await hasAnyTriByteCredsConfigured();
 
-  let scraped: ScrapedCourse[] | null = null;
+  let scraped: TriByteScrapedCourse[] | null = null;
   const errors: string[] = [];
   let usedStaticFallback = false;
 

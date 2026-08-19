@@ -48,3 +48,11 @@ description: How TriByte LMS is structured, login approach, and what each course
 **Why:** TriByte's login page currently has an `id` attribute between the `form_build_id` field's `name` and `value` attributes, and Drupal ties its form token to the session created by the initial GET. A strict attribute-order parser or a POST without that cookie silently prevents authenticated scraping.
 
 **How to apply:** Parse the entire hidden input tag for `form_build_id`, not a fixed attribute sequence. On `/reviewer/topics`, obtain topic node IDs from the ordered `/node/{nid}/edit/subtopics` links: the current carousel exposes no `data-nid` attributes. Fetch `/node/{nid}/edit/topic/tab` to read each actual topic title.
+
+## Course-list scraping quirks
+
+**Rule:** Identify course cards by their `li#category_{nid}` carousel element and extract the course title from `.carousel_title_element`.
+
+**Why:** The authenticated `/reviewer/course/list` page does not use `views-row` cards. It also includes ordinary Drupal forms with `form_build_id`, so those fields alone do not mean the session has been redirected to the login page.
+
+**How to apply:** Treat a page as the login screen only when its title is `User account | HIMT` and it has the `#user-login` form. Keep course scraping resilient to nested list content by finding the matching closing `li` for each carousel card.
