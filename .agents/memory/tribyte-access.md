@@ -49,10 +49,10 @@ description: How TriByte LMS is structured, login approach, and what each course
 
 **How to apply:** Parse the entire hidden input tag for `form_build_id`, not a fixed attribute sequence. On `/reviewer/topics`, obtain topic node IDs from the ordered `/node/{nid}/edit/subtopics` links: the current carousel exposes no `data-nid` attributes. Fetch `/node/{nid}/edit/topic/tab` to read each actual topic title.
 
-## Course-list scraping quirks
+## Login-page detection
 
-**Rule:** Identify course cards by their `li#category_{nid}` carousel element and extract the course title from `.carousel_title_element`.
+**Rule:** Detect a TriByte login page from a form whose id starts with `user-login`; do not depend on its page title.
 
-**Why:** The authenticated `/reviewer/course/list` page does not use `views-row` cards. It also includes ordinary Drupal forms with `form_build_id`, so those fields alone do not mean the session has been redirected to the login page.
+**Why:** The current themed login page has an empty title and uses `user-login-1`. Both a rejected login and an unauthenticated request still receive an HTTP 200 response and guest-session cookies.
 
-**How to apply:** Treat a page as the login screen only when its title is `User account | HIMT` and it has the `#user-login` form. Keep course scraping resilient to nested list content by finding the matching closing `li` for each carousel card.
+**How to apply:** After form login, request a protected course-list page before caching its cookie. Reject the login if either response contains the login form, so scraping failures are not misreported as missing course content.

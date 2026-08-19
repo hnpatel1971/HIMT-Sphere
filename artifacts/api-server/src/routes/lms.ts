@@ -1317,12 +1317,9 @@ const FETCH_TIMEOUT_MS = 30_000;
 
 /** Detect a TriByte login-redirect page (session expired / bad cookie). */
 function isTBLoginPage(html: string): boolean {
-  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-    ?.replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return title === "User account | HIMT"
-    && /<form\b[^>]*\bid=["']user-login["']/i.test(html);
+  // TriByte has used both `user-login` and `user-login-1`, and the current
+  // themed login page has an empty <title>. The form ID is the durable signal.
+  return /<form\b[^>]*\bid=["']user-login(?:-[^"']*)?["']/i.test(html);
 }
 
 /** Log into TriByte via Drupal form; returns a Cookie header string. */
@@ -1363,9 +1360,28 @@ async function loginToTriByteShared(tbUser: string, tbPass: string): Promise<str
   });
   const allCookies = [...initialCookies, ...cookieLines(loginRes)];
   if (!allCookies.length) throw new Error("TriByte login did not return cookies — check credentials");
+  if (loginRes.status >= 400) {
+    throw new Error(`TriByte login returned ${loginRes.status} — check the configured credentials`);
+  }
+  const loginResponseHtml = await loginRes.text();
+  if (isTBLoginPage(loginResponseHtml)) {
+    throw new Error("TriByte login was rejected — update the configured credentials");
+  }
   const byName = new Map<string, string>();
   for (const cookie of allCookies) byName.set(cookie.split("=")[0], cookie);
-  return [...byName.values()].join("; ");
+  const cookie = [...byName.values()].join("; ");
+
+  // A Drupal guest session also has cookies, so verify a protected page before
+  // caching the result. Otherwise an invalid login looks like an empty course.
+  const verifyRes = await fetch(`${TB_BASE_URL}/reviewer/course/list`, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: { Cookie: cookie, "User-Agent": "Mozilla/5.0" },
+  });
+  const verifyHtml = await verifyRes.text();
+  if (!verifyRes.ok || isTBLoginPage(verifyHtml)) {
+    throw new Error("TriByte login was rejected — update the configured credentials");
+  }
+  return cookie;
 }
 
 // In-memory TriByte session cache — avoids re-logging in on every request.
@@ -1818,12 +1834,14 @@ router.post("/curriculum/structure-imports/:jobId/retry-failed", requireAdmin, a
     }
     const items = await db.select().from(courseStructureImportJobItemsTable)
       .where(eq(courseStructureImportJobItemsTable.jobId, jobId));
-    const failures = items.filter(item => item.status === "failed");
-    if (!failures.length) {
-      res.status(409).json({ error: "There are no failed courses to retry" });
+    // A cancelled job has both failed and not-yet-started courses. Resume every
+    // unfinished item so "retry" cannot leave the pending part of the catalog behind.
+    const retryableItems = items.filter(item => ["failed", "pending"].includes(item.status));
+    if (!retryableItems.length) {
+      res.status(409).json({ error: "There are no unfinished courses to retry" });
       return;
     }
-    for (const item of failures) {
+    for (const item of retryableItems) {
       await db.update(courseStructureImportJobItemsTable)
         .set({ status: "pending", error: null, finishedAt: null, updatedAt: new Date() })
         .where(eq(courseStructureImportJobItemsTable.id, item.id));

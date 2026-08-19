@@ -1034,7 +1034,10 @@ function CurriculumCoursesPage() {
     try {
       const result = await apiFetch<{ job: StructureImportJob }>(`/curriculum/structure-imports/${bulkJob.id}/retry-failed`, 'POST');
       setBulkJob(result.job);
-      toast({ title: 'Retry started', description: 'Only failed courses will be retried.' });
+      toast({
+        title: 'Import resumed',
+        description: 'Failed and not-yet-started courses will be processed.',
+      });
     } catch (err) {
       toast({ title: 'Could not retry failures', description: String(err), variant: 'destructive' });
     }
@@ -1063,6 +1066,8 @@ function CurriculumCoursesPage() {
     if (lang && lang !== 'All' && c.language !== lang) return false;
     return true;
   });
+  const pendingBulkCourseCount = bulkJob?.items.filter(item => ["pending", "running"].includes(item.status)).length ?? 0;
+  const retryableBulkCourseCount = pendingBulkCourseCount + (bulkJob?.failedCourses ?? 0);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   function toggleSelect(id: string) {
@@ -1181,9 +1186,11 @@ function CurriculumCoursesPage() {
                     <X size={13}/> Stop after current
                   </button>
                 )}
-                {bulkJob.failedCourses > 0 && !['queued', 'running'].includes(bulkJob.status) && (
+                {retryableBulkCourseCount > 0 && !['queued', 'running'].includes(bulkJob.status) && (
                   <button data-testid="button-retry-structure-import-failures" onClick={retryBulkFailures} className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5')}>
-                    <RefreshCw size={13}/> Retry {bulkJob.failedCourses} failed
+                    <RefreshCw size={13}/> {pendingBulkCourseCount > 0
+                      ? `Resume ${retryableBulkCourseCount} unfinished`
+                      : `Retry ${bulkJob.failedCourses} failed`}
                   </button>
                 )}
               </div>
