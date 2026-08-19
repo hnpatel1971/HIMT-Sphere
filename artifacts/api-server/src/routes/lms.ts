@@ -925,6 +925,18 @@ function extractTopicThumb(innerHtml: string): string {
   return m?.[1] ?? '';
 }
 
+/** Read a Drupal node title from its edit form without relying on CSS classes. */
+function extractDrupalNodeTitle(html: string): string | null {
+  const titleInput = html.match(/<input\b(?=[^>]*\bname=["']title["'])[^>]*>/i)?.[0];
+  const value = titleInput?.match(/\bvalue=["']([^"']*)["']/i)?.[1];
+  if (!value) return null;
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .trim() || null;
+}
+
 // Import topics (and sub-topics) from TriByte for a curriculum course.
 // Scrapes /reviewer/topics?cat={tid}&catspec=true, parses the carousel HTML,
 // and stores both top-level topics and any nested subtopics.
@@ -945,6 +957,10 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
     const htmlRes = await fetch(url, { headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" } });
     if (!htmlRes.ok) { res.status(502).json({ error: `TriByte responded ${htmlRes.status}` }); return; }
     const html = await htmlRes.text();
+    if (isTBLoginPage(html)) {
+      res.status(401).json({ error: "TriByte rejected the stored login — check the configured credentials and try again" });
+      return;
+    }
 
     // ── Step 1: Collect all <li data-nid="NID"> positions and their inner HTML ──
     interface LiNidItem {
@@ -952,13 +968,27 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
       depth: number; innerHtml: string;
     }
     const nidItems: LiNidItem[] = [];
-    const liTagRe = /<li([^>]*)>/g;
+    const liTagRe = /<li\b([^>]*)>/gi;
     let m: RegExpExecArray | null;
     while ((m = liTagRe.exec(html)) !== null) {
-      const nidMatch = m[1].match(/\bdata-nid="(\d+)"/);
+      const nidMatch = m[1].match(/\bdata-nid\s*=\s*["'](\d+)["']/i);
       if (nidMatch) {
         const innerStart = m.index + m[0].length;
         nidItems.push({ pos: m.index, nid: nidMatch[1], innerStart, depth: 0, innerHtml: '' });
+      }
+    }
+
+    // TriByte's current topic carousel does not use data attributes. Its ordered
+    // "Edit sub-topics" links are the stable source of each topic node ID.
+    if (nidItems.length === 0) {
+      const seenNids = new Set<string>();
+      const subtopicLinkRe = /href=["'][^"']*\/node\/(\d+)\/edit\/subtopics[^"']*["']/gi;
+      while ((m = subtopicLinkRe.exec(html)) !== null) {
+        const nid = m[1];
+        if (!seenNids.has(nid)) {
+          seenNids.add(nid);
+          nidItems.push({ pos: m.index, nid, innerStart: m.index, depth: 0, innerHtml: "" });
+        }
       }
     }
 
@@ -977,7 +1007,15 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
     }
 
     if (nidItems.length === 0) {
-      res.status(200).json({ imported: 0, subtopicsImported: 0, topics: [], message: "No topics found on TriByte page" });
+      const pageTitle = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+        ?.replace(/<[^>]+>/g, "").trim();
+      console.warn("[tribyte] Topics page contained no topic nodes", {
+        courseId: course.id,
+        tid: course.tribyteTid,
+        strategy: session.strategy,
+        pageTitle,
+      });
+      res.status(422).json({ error: "TriByte returned no topic cards for this course", pageTitle });
       return;
     }
 
@@ -985,6 +1023,16 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
     const minDepth   = Math.min(...nidItems.map(i => i.depth));
     const topicItems = nidItems.filter(i => i.depth === minDepth);
     const subItems   = nidItems.filter(i => i.depth >  minDepth);
+    const topicTitles = new Map<string, string>();
+    for (const topic of topicItems) {
+      const detailRes = await fetch(`${TB_BASE_URL}/node/${topic.nid}/edit/topic/tab`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" },
+      });
+      if (!detailRes.ok) continue;
+      const title = extractDrupalNodeTitle(await detailRes.text());
+      if (title) topicTitles.set(topic.nid, title);
+    }
 
     // ── Step 5: Clear existing data ──
     const existingTopics = await db.select().from(courseTopicsTable)
@@ -1000,7 +1048,7 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
       courseId: req.params.id,
       nid:      t.nid,
       tid:      course.tribyteTid ?? "",
-      name:     extractTopicName(t.innerHtml, t.nid),
+       name:     topicTitles.get(t.nid) ?? extractTopicName(t.innerHtml, t.nid),
       order:    i,
       thumbUrl: extractTopicThumb(t.innerHtml),
       faculty:  "",
@@ -1059,23 +1107,40 @@ async function loginToTriByteShared(tbUser: string, tbPass: string): Promise<str
     headers: { "User-Agent": "Mozilla/5.0" },
   });
   const loginHtml = await loginPageRes.text();
-  const fbidMatch = loginHtml.match(/name="form_build_id"\s+value="([^"]+)"/);
-  if (!fbidMatch) throw new Error("Could not find form_build_id on TriByte login page");
+  const buildIdInput = loginHtml.match(/<input\b[^>]*\bname=["']form_build_id["'][^>]*>/i)?.[0];
+  const formBuildId = buildIdInput?.match(/\bvalue=["']([^"']+)["']/i)?.[1];
+  if (!formBuildId) throw new Error("Could not find form_build_id on TriByte login page");
+
+  const cookieLines = (response: Response): string[] => {
+    const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+    const raw = headers.getSetCookie?.() ?? [headers.get("set-cookie") ?? ""];
+    return raw
+      .flatMap(value => value.split(/,(?=\s*[^;,\s]+=)/))
+      .map(value => value.split(";")[0].trim())
+      .filter(Boolean);
+  };
+  const initialCookies = cookieLines(loginPageRes);
 
   const body = new URLSearchParams({
     name: tbUser, pass: tbPass,
-    form_build_id: fbidMatch[1], form_id: "user_login", op: "Log in",
+    form_build_id: formBuildId, form_id: "user_login", op: "Log in",
   });
   const loginRes = await fetch(`${TB_BASE_URL}/user/login?destination=reviewer/course/list`, {
     method:   "POST",
     signal:   AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    headers:  { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+    headers:  {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Mozilla/5.0",
+      Cookie: initialCookies.join("; "),
+    },
     body:     body.toString(),
     redirect: "manual",
   });
-  const rawCookies = loginRes.headers.get("set-cookie") ?? "";
-  if (!rawCookies) throw new Error("TriByte login did not return cookies — check credentials");
-  return rawCookies.split(/,(?=[^ ])/).map(c => c.split(";")[0].trim()).join("; ");
+  const allCookies = [...initialCookies, ...cookieLines(loginRes)];
+  if (!allCookies.length) throw new Error("TriByte login did not return cookies — check credentials");
+  const byName = new Map<string, string>();
+  for (const cookie of allCookies) byName.set(cookie.split("=")[0], cookie);
+  return [...byName.values()].join("; ");
 }
 
 /** Resolve a TriByte cookie header from env vars (SESSION → USERNAME+PASSWORD). */

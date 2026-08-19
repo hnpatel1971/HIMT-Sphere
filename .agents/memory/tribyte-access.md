@@ -40,3 +40,11 @@ description: How TriByte LMS is structured, login approach, and what each course
 `syncTriByteCourses()` runs on API server startup — checks if any curriculum_courses have a non-empty `tribyte_nid`, and if not, deletes all placeholder rows and inserts the 95 real ones. Only runs once.
 
 **Why:** Seed guard (`if (existing.length > 0) return`) prevented re-seeding since the `courses` table was already populated.
+
+## Topic import quirks
+
+**Rule:** Preserve the session cookie created by the initial Drupal login-page GET when submitting the login form, then carry the returned cookies to each authenticated request.
+
+**Why:** TriByte's login page currently has an `id` attribute between the `form_build_id` field's `name` and `value` attributes, and Drupal ties its form token to the session created by the initial GET. A strict attribute-order parser or a POST without that cookie silently prevents authenticated scraping.
+
+**How to apply:** Parse the entire hidden input tag for `form_build_id`, not a fixed attribute sequence. On `/reviewer/topics`, obtain topic node IDs from the ordered `/node/{nid}/edit/subtopics` links: the current carousel exposes no `data-nid` attributes. Fetch `/node/{nid}/edit/topic/tab` to read each actual topic title.
