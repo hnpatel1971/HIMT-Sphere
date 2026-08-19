@@ -440,7 +440,9 @@ components:
         duration: { type: string }
         status: { type: string }
         protected: { type: boolean }
-      required: [id, title, type, duration, status, protected]
+        resourceId: { type: ["string", "null"] }
+        openUrl: { type: ["string", "null"] }
+      required: [id, title, type, duration, status, protected, resourceId, openUrl]
     Assignment:
       type: object
       properties:

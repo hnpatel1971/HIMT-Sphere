@@ -1,9 +1,12 @@
 import { Router, type IRouter } from "express";
 import "express-session"; // ensure SessionData augmentation from auth.ts is loaded
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "crypto";
+import { Readable } from "stream";
 import { eq, ilike, or } from "drizzle-orm";
 import { db, pool } from "@workspace/db";
 import { parseTriByteCoursePage, type TriByteScrapedCourse } from "../lib/tribyte-course-parser";
+import { parseTriByteResources, type ParsedTriByteResource } from "../lib/tribyte-resource-parser";
+import { getStoredResource, resourceObjectPath, storeResourceStream } from "../lib/resource-storage";
 import {
   courses as coursesTable,
   assignments as assignmentsTable,
@@ -19,6 +22,9 @@ import {
   courseSubtopics as courseSubtopicsTable,
   courseStructureImportJobs as courseStructureImportJobsTable,
   courseStructureImportJobItems as courseStructureImportJobItemsTable,
+  courseResources as courseResourcesTable,
+  courseResourceImportJobs as courseResourceImportJobsTable,
+  courseResourceImportJobItems as courseResourceImportJobItemsTable,
   groups as groupsTable,
   tags as tagsTable,
   glossaryTerms as glossaryTable,
@@ -69,7 +75,7 @@ const topicDetail = [
     progress: 100,
     locked: false,
     activities: [
-      { id: "activity-navigation", title: "Navigation Rules & Watchkeeping", type: "Protected document", duration: "18 min", status: "complete", protected: true },
+      { id: "activity-navigation", title: "Navigation Rules & Watchkeeping", type: "Protected document", duration: "18 min", status: "complete", protected: true, resourceId: null, openUrl: null },
     ],
   },
   {
@@ -79,8 +85,8 @@ const topicDetail = [
     progress: 46,
     locked: false,
     activities: [
-      { id: "activity-bridge", title: "Bridge Resource Management", type: "Video lesson", duration: "24 min", status: "current", protected: true },
-      { id: "activity-quiz",   title: "Knowledge check: Bridge procedures", type: "Quiz", duration: "12 questions", status: "locked", protected: false },
+      { id: "activity-bridge", title: "Bridge Resource Management", type: "Video lesson", duration: "24 min", status: "current", protected: true, resourceId: null, openUrl: null },
+      { id: "activity-quiz",   title: "Knowledge check: Bridge procedures", type: "Quiz", duration: "12 questions", status: "locked", protected: false, resourceId: null, openUrl: null },
     ],
   },
   {
@@ -90,7 +96,7 @@ const topicDetail = [
     progress: 0,
     locked: true,
     activities: [
-      { id: "activity-passage", title: "Passage planning checklist", type: "Practical activity", duration: "30 min", status: "locked", protected: false },
+      { id: "activity-passage", title: "Passage planning checklist", type: "Practical activity", duration: "30 min", status: "locked", protected: false, resourceId: null, openUrl: null },
     ],
   },
 ];
@@ -509,7 +515,38 @@ router.get("/courses", async (req, res) => {
   const parsed = ListCoursesQueryParams.safeParse(req.query);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   try {
-    let rows = await db.select().from(coursesTable);
+    const [learnerRows, curriculumRows] = await Promise.all([
+      db.select().from(coursesTable),
+      db.select().from(curriculumCoursesTable),
+    ]);
+    let rows = [
+      ...learnerRows.map(row => ({
+        ...row,
+        category: row.category ?? "",
+        language: row.language ?? "English",
+        status: row.status ?? "Draft",
+        progress: row.progress ?? 0,
+        learners: row.learners ?? 0,
+        duration: row.duration ?? "",
+        thumbnail: row.thumbnail ?? "",
+        nextActivity: row.nextActivity ?? null,
+        accent: row.accent ?? "ocean",
+      })),
+      ...curriculumRows.map(row => ({
+        id: row.id,
+        code: `TB-${row.tribyteTid || row.tribyteNid || "COURSE"}`,
+        name: row.name,
+        category: row.groupName ?? "TriByte learning",
+        language: row.language ?? "English",
+        status: row.status ?? "Published",
+        progress: 0,
+        learners: 0,
+        duration: "Self-paced",
+        thumbnail: row.thumbUrl ?? "",
+        nextActivity: null,
+        accent: "ocean",
+      })),
+    ];
     const search = parsed.data.search?.toLowerCase();
     const status = parsed.data.status?.toLowerCase();
     if (search) rows = rows.filter(c => c.name.toLowerCase().includes(search) || c.code.toLowerCase().includes(search));
@@ -532,9 +569,94 @@ router.get("/courses/:courseId", async (req, res) => {
   const params = GetCourseParams.safeParse(req.params);
   if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
   try {
-    const [course] = await db.select().from(coursesTable).where(eq(coursesTable.id, params.data.courseId));
-    if (!course) { res.status(404).json({ error: "Course not found" }); return; }
-    res.json(GetCourseResponse.parse({ ...course, description: "Build confident, compliant bridge teams through applied navigation, regulations and watchkeeping practice.", objectives: ["Apply safe navigation principles in operational scenarios","Coordinate bridge teams using clear communication","Prepare and review a compliant passage plan"], topics: topicDetail }));
+    const [learnerCourse] = await db.select().from(coursesTable).where(eq(coursesTable.id, params.data.courseId));
+    if (learnerCourse) {
+      res.json(GetCourseResponse.parse({
+        ...learnerCourse,
+        category: learnerCourse.category ?? "",
+        language: learnerCourse.language ?? "English",
+        status: learnerCourse.status ?? "Draft",
+        progress: learnerCourse.progress ?? 0,
+        learners: learnerCourse.learners ?? 0,
+        duration: learnerCourse.duration ?? "",
+        thumbnail: learnerCourse.thumbnail ?? "",
+        nextActivity: learnerCourse.nextActivity ?? null,
+        accent: learnerCourse.accent ?? "ocean",
+        description: "Build confident, compliant bridge teams through applied navigation, regulations and watchkeeping practice.",
+        objectives: ["Apply safe navigation principles in operational scenarios", "Coordinate bridge teams using clear communication", "Prepare and review a compliant passage plan"],
+        topics: topicDetail,
+      }));
+      return;
+    }
+
+    const [curriculumCourse] = await db.select().from(curriculumCoursesTable)
+      .where(eq(curriculumCoursesTable.id, params.data.courseId));
+    if (!curriculumCourse) { res.status(404).json({ error: "Course not found" }); return; }
+    const [topics, subtopics, resources] = await Promise.all([
+      db.select().from(courseTopicsTable).where(eq(courseTopicsTable.courseId, curriculumCourse.id)),
+      db.select().from(courseSubtopicsTable).where(eq(courseSubtopicsTable.courseId, curriculumCourse.id)),
+      db.select().from(courseResourcesTable).where(eq(courseResourcesTable.courseId, curriculumCourse.id)),
+    ]);
+    topics.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const readyResources = resources
+      .filter(resource => resource.status === "ready")
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const resourceDuration = (size: number | null) => {
+      if (!size) return "Available";
+      if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+      return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    };
+    const activityFor = (resource: typeof courseResourcesTable.$inferSelect) => ({
+      id: `activity-${resource.id}`,
+      title: resource.title,
+      type: resource.resourceType,
+      duration: resourceDuration(resource.sizeBytes),
+      status: "available",
+      protected: false,
+      resourceId: resource.id,
+      openUrl: req.session.isAdmin === true ? `/api/curriculum/resources/${resource.id}/open` : null,
+    });
+    const learnerTopics = topics.map(topic => ({
+      id: topic.id,
+      title: topic.name,
+      duration: "Self-paced",
+      progress: 0,
+      locked: false,
+      activities: readyResources
+        .filter(resource => resource.topicId === topic.id || (
+          resource.subtopicId !== null
+          && subtopics.some(subtopic => subtopic.id === resource.subtopicId && subtopic.topicId === topic.id)
+        ))
+        .map(activityFor),
+    }));
+    const courseLevelResources = readyResources.filter(resource => !resource.topicId && !resource.subtopicId);
+    if (courseLevelResources.length) {
+      learnerTopics.unshift({
+        id: "course-resources",
+        title: "Course resources",
+        duration: "Self-paced",
+        progress: 0,
+        locked: false,
+        activities: courseLevelResources.map(activityFor),
+      });
+    }
+    res.json(GetCourseResponse.parse({
+      id: curriculumCourse.id,
+      code: `TB-${curriculumCourse.tribyteTid || curriculumCourse.tribyteNid || "COURSE"}`,
+      name: curriculumCourse.name,
+      category: curriculumCourse.groupName ?? "TriByte learning",
+      language: curriculumCourse.language ?? "English",
+      status: curriculumCourse.status ?? "Published",
+      progress: 0,
+      learners: 0,
+      duration: "Self-paced",
+      thumbnail: curriculumCourse.thumbUrl ?? "",
+      nextActivity: null,
+      accent: "ocean",
+      description: "TriByte course structure and migrated learning resources.",
+      objectives: ["Review the course materials in sequence", "Complete the assigned learning resources"],
+      topics: learnerTopics,
+    }));
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
@@ -1881,7 +2003,521 @@ router.post("/curriculum/structure-imports/:jobId/retry-failed", requireAdmin, a
   }
 });
 
+// ─── Bulk TriByte resource imports ───────────────────────────────────────────
+
+type ResourceParent = {
+  topicId: string | null;
+  subtopicId: string | null;
+  sourceNid: string;
+};
+
+type ResourceImportResult = {
+  discovered: number;
+  imported: number;
+  failed: number;
+};
+
+const activeResourceImportRunners = new Set<string>();
+const MAX_RESOURCE_BYTES = 500 * 1024 * 1024;
+const TRIBYTE_RESOURCE_HOSTS = new Set([
+  "admin.learn.himtelearning.com",
+  "static.learn.himtelearning.com",
+]);
+const EXTERNAL_VIDEO_HOSTS = new Set([
+  "youtu.be",
+  "www.youtube.com",
+  "youtube.com",
+  "vimeo.com",
+  "www.vimeo.com",
+]);
+
+function stableResourceId(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
+function publicResourceImportError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/https?:\/\/\S+/g, "the source file")
+    .slice(0, 300);
+}
+
+function isTriByteUrl(url: string): boolean {
+  try { return TRIBYTE_RESOURCE_HOSTS.has(new URL(url).hostname.toLowerCase()); }
+  catch { return false; }
+}
+
+function isApprovedExternalVideoUrl(url: string): boolean {
+  try { return EXTERNAL_VIDEO_HOSTS.has(new URL(url).hostname.toLowerCase()); }
+  catch { return false; }
+}
+
+function isApprovedDownloadUrl(url: string): boolean {
+  return isTriByteUrl(url);
+}
+
+async function fetchApprovedResource(
+  url: string,
+  session: { cookie: string; strategy: string },
+): Promise<Response> {
+  let target = new URL(url);
+  for (let redirects = 0; redirects < 4; redirects++) {
+    if (!isApprovedDownloadUrl(target.href)) {
+      throw new Error("External source requires review before it can be migrated");
+    }
+    const response = await fetch(target, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS * 4),
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        ...(isTriByteUrl(target.href) ? { Cookie: session.cookie } : {}),
+      },
+    });
+    if (response.status < 300 || response.status >= 400) return response;
+    const location = response.headers.get("location");
+    if (!location) throw new Error("Source file returned an invalid redirect");
+    target = new URL(location, target);
+  }
+  throw new Error("Source file redirected too many times");
+}
+
+function resourceMimeFromName(name: string, fallback: string): string {
+  const extension = name.split(".").pop()?.toLowerCase();
+  const byExtension: Record<string, string> = {
+    pdf: "application/pdf", doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+    mp3: "audio/mpeg", wav: "audio/wav", zip: "application/zip",
+  };
+  return byExtension[extension ?? ""] ?? fallback;
+}
+
+async function fetchTriByteResourcePage(
+  url: string,
+  session: { cookie: string; strategy: string },
+): Promise<string> {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      ...(isTriByteUrl(url) ? { Cookie: session.cookie } : {}),
+    },
+  });
+  if (!response.ok) throw new Error(`TriByte resource page responded ${response.status}`);
+  const html = await response.text();
+  if (isTBLoginPage(html)) throw new Error("TriByte rejected the stored login — check the configured credentials");
+  return html;
+}
+
+async function collectCourseResources(
+  course: typeof curriculumCoursesTable.$inferSelect,
+  session: { cookie: string; strategy: string },
+): Promise<Array<ParsedTriByteResource & ResourceParent>> {
+  const entries: Array<ParsedTriByteResource & ResourceParent> = [];
+  const seen = new Set<string>();
+  const addFromPage = async (url: string, parent: ResourceParent) => {
+    const html = await fetchTriByteResourcePage(url, session);
+    for (const resource of parseTriByteResources(html, url)) {
+      const key = `${parent.sourceNid}:${resource.sourceUrl}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({ ...resource, ...parent });
+    }
+  };
+
+  if (course.tribyteNid) {
+    await addFromPage(`${TB_BASE_URL}/node/${course.tribyteNid}`, {
+      topicId: null, subtopicId: null, sourceNid: course.tribyteNid,
+    });
+  }
+
+  const topics = await db.select().from(courseTopicsTable)
+    .where(eq(courseTopicsTable.courseId, course.id));
+  const subtopics = await db.select().from(courseSubtopicsTable)
+    .where(eq(courseSubtopicsTable.courseId, course.id));
+
+  for (const topic of topics) {
+    if (!topic.nid) continue;
+    await addFromPage(`${TB_BASE_URL}/node/${topic.nid}`, {
+      topicId: topic.id, subtopicId: null, sourceNid: topic.nid,
+    });
+  }
+  for (const subtopic of subtopics) {
+    if (!subtopic.nid) continue;
+    await addFromPage(`${TB_BASE_URL}/node/${subtopic.nid}`, {
+      topicId: subtopic.topicId, subtopicId: subtopic.id, sourceNid: subtopic.nid,
+    });
+  }
+
+  return entries;
+}
+
+async function migrateTriByteResource(
+  course: typeof curriculumCoursesTable.$inferSelect,
+  resource: ParsedTriByteResource & ResourceParent,
+  order: number,
+  session: { cookie: string; strategy: string },
+): Promise<"imported" | "existing" | "failed"> {
+  const sourceIdentity = `${course.id}:${resource.sourceNid}:${resource.sourceUrl}`;
+  const id = `cr-${stableResourceId(sourceIdentity)}`;
+  const [existing] = await db.select().from(courseResourcesTable)
+    .where(eq(courseResourcesTable.sourceIdentity, sourceIdentity));
+  if (existing?.status === "ready" && (existing.storagePath || !isTriByteUrl(existing.sourceUrl))) {
+    return "existing";
+  }
+
+  const resourceRow = {
+    id,
+    courseId: course.id,
+    topicId: resource.topicId,
+    subtopicId: resource.subtopicId,
+    sourceNid: resource.sourceNid,
+    sourceIdentity,
+    sourceUrl: resource.sourceUrl,
+    title: resource.title.slice(0, 500),
+    resourceType: resource.resourceType,
+    fileName: resource.fileName.slice(0, 500),
+    order,
+    status: "pending",
+    error: null,
+    updatedAt: new Date(),
+  };
+  if (existing) {
+    await db.update(courseResourcesTable).set(resourceRow)
+      .where(eq(courseResourcesTable.id, existing.id));
+  } else {
+    await db.insert(courseResourcesTable).values(resourceRow);
+  }
+
+  // Hosted recordings are learner-playable references rather than downloadable
+  // files. Only allow the reviewed providers instead of following arbitrary URLs.
+  if (isApprovedExternalVideoUrl(resource.sourceUrl) && resource.resourceType === "Video") {
+    await db.update(courseResourcesTable).set({ status: "ready", error: null, updatedAt: new Date() })
+      .where(eq(courseResourcesTable.id, id));
+    return "imported";
+  }
+
+  if (!isApprovedDownloadUrl(resource.sourceUrl)) {
+    await db.update(courseResourcesTable).set({
+      status: "unsupported",
+      error: "External source requires review before it can be migrated",
+      updatedAt: new Date(),
+    }).where(eq(courseResourcesTable.id, id));
+    return "failed";
+  }
+
+  try {
+    const response = await fetchApprovedResource(resource.sourceUrl, session);
+    if (!response.ok) throw new Error(`Source file responded ${response.status}`);
+    if (!response.body) throw new Error("Source file returned no content");
+    const contentType = response.headers.get("content-type")?.split(";")[0] ?? "";
+    if (contentType.includes("text/html")) {
+      await db.update(courseResourcesTable).set({
+        status: "unsupported",
+        error: "Source link is an HTML page, not a downloadable learning resource",
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, id));
+      return "failed";
+    }
+    const contentLength = Number(response.headers.get("content-length") ?? "0");
+    if (Number.isFinite(contentLength) && contentLength > MAX_RESOURCE_BYTES) {
+      throw new Error("Source file exceeds the 500 MB migration limit");
+    }
+
+    const objectPath = resourceObjectPath(`${course.id}/${stableResourceId(sourceIdentity)}/${resource.fileName || "resource"}`);
+    const stored = await storeResourceStream(
+      objectPath,
+      response.body,
+      resourceMimeFromName(resource.fileName, contentType),
+      MAX_RESOURCE_BYTES,
+    );
+    await db.update(courseResourcesTable).set({
+      status: "ready",
+      storagePath: objectPath,
+      mimeType: resourceMimeFromName(resource.fileName, contentType),
+      sizeBytes: stored.sizeBytes,
+      checksum: stored.checksum,
+      error: null,
+      updatedAt: new Date(),
+    }).where(eq(courseResourcesTable.id, id));
+    return "imported";
+  } catch (error) {
+    await db.update(courseResourcesTable).set({
+      status: "failed",
+      error: publicResourceImportError(error),
+      updatedAt: new Date(),
+    }).where(eq(courseResourcesTable.id, id));
+    return "failed";
+  }
+}
+
+async function importTriByteCourseResources(
+  course: typeof curriculumCoursesTable.$inferSelect,
+  session: { cookie: string; strategy: string },
+): Promise<ResourceImportResult> {
+  const resources = await collectCourseResources(course, session);
+  let imported = 0;
+  let failed = 0;
+  for (const [index, resource] of resources.entries()) {
+    const result = await migrateTriByteResource(course, resource, index, session);
+    if (result === "imported") imported++;
+    if (result === "failed") failed++;
+  }
+  return { discovered: resources.length, imported, failed };
+}
+
+async function getResourceImportJob(jobId: string) {
+  const [job] = await db.select().from(courseResourceImportJobsTable)
+    .where(eq(courseResourceImportJobsTable.id, jobId));
+  if (!job) return null;
+  const items = await db.select().from(courseResourceImportJobItemsTable)
+    .where(eq(courseResourceImportJobItemsTable.jobId, jobId));
+  return { ...job, items };
+}
+
+async function refreshResourceImportSummary(
+  jobId: string,
+  changes: Partial<typeof courseResourceImportJobsTable.$inferInsert> = {},
+) {
+  const items = await db.select().from(courseResourceImportJobItemsTable)
+    .where(eq(courseResourceImportJobItemsTable.jobId, jobId));
+  const complete = items.filter(item => item.status === "completed" || item.status === "failed");
+  await db.update(courseResourceImportJobsTable).set({
+    completedCourses: complete.length,
+    importedResources: items.reduce((sum, item) => sum + (item.importedResources ?? 0), 0),
+    failedResources: items.reduce((sum, item) => sum + (item.failedResources ?? 0), 0),
+    updatedAt: new Date(),
+    ...changes,
+  }).where(eq(courseResourceImportJobsTable.id, jobId));
+}
+
+function queueResourceImportJob(jobId: string) {
+  setTimeout(() => { void runResourceImportJob(jobId); }, 25);
+}
+
+async function runResourceImportJob(jobId: string): Promise<void> {
+  if (activeResourceImportRunners.has(jobId)) return;
+  activeResourceImportRunners.add(jobId);
+  try {
+    const [job] = await db.select().from(courseResourceImportJobsTable)
+      .where(eq(courseResourceImportJobsTable.id, jobId));
+    if (!job) return;
+    const session = await resolveTriByteCookie();
+    if (!session) throw new Error("No TriByte credentials configured");
+    await refreshResourceImportSummary(jobId, {
+      status: "running",
+      startedAt: job.startedAt ?? new Date(),
+      finishedAt: null,
+    });
+
+    const items = await db.select().from(courseResourceImportJobItemsTable)
+      .where(eq(courseResourceImportJobItemsTable.jobId, jobId));
+    for (const item of items.filter(row => row.status === "pending" || row.status === "failed")) {
+      const [freshJob] = await db.select().from(courseResourceImportJobsTable)
+        .where(eq(courseResourceImportJobsTable.id, jobId));
+      if (freshJob?.cancelRequested) {
+        await refreshResourceImportSummary(jobId, {
+          status: "cancelled",
+          currentCourseId: null,
+          currentCourseName: null,
+          finishedAt: new Date(),
+        });
+        return;
+      }
+
+      await db.update(courseResourceImportJobItemsTable).set({
+        status: "running",
+        attempts: (item.attempts ?? 0) + 1,
+        error: null,
+        startedAt: new Date(),
+        updatedAt: new Date(),
+      }).where(eq(courseResourceImportJobItemsTable.id, item.id));
+      await refreshResourceImportSummary(jobId, {
+        currentCourseId: item.courseId,
+        currentCourseName: item.courseName,
+      });
+
+      try {
+        const [course] = await db.select().from(curriculumCoursesTable)
+          .where(eq(curriculumCoursesTable.id, item.courseId));
+        if (!course) throw new Error("Course was removed from the curriculum");
+        const result = await importTriByteCourseResources(course, session);
+        await db.update(courseResourceImportJobItemsTable).set({
+          status: result.failed > 0 ? "failed" : "completed",
+          discoveredResources: result.discovered,
+          importedResources: result.imported,
+          failedResources: result.failed,
+          error: result.failed > 0 ? `${result.failed} resource${result.failed === 1 ? "" : "s"} need attention` : null,
+          finishedAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(courseResourceImportJobItemsTable.id, item.id));
+      } catch (error) {
+        const publicError = publicResourceImportError(error);
+        logger.warn({ jobId, courseId: item.courseId, error: publicError }, "TriByte resource import failed for course");
+        await db.update(courseResourceImportJobItemsTable).set({
+          status: "failed",
+          error: publicError,
+          finishedAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(courseResourceImportJobItemsTable.id, item.id));
+      }
+      await refreshResourceImportSummary(jobId, { currentCourseId: null, currentCourseName: null });
+    }
+
+    const completedItems = await db.select().from(courseResourceImportJobItemsTable)
+      .where(eq(courseResourceImportJobItemsTable.jobId, jobId));
+    await refreshResourceImportSummary(jobId, {
+      status: completedItems.some(item => item.status === "failed") ? "completed_with_failures" : "completed",
+      currentCourseId: null,
+      currentCourseName: null,
+      finishedAt: new Date(),
+    });
+  } catch (error) {
+    logger.error({ jobId, error: publicResourceImportError(error) }, "TriByte resource import job stopped");
+    await refreshResourceImportSummary(jobId, {
+      status: "failed",
+      currentCourseId: null,
+      currentCourseName: null,
+      finishedAt: new Date(),
+    });
+  } finally {
+    activeResourceImportRunners.delete(jobId);
+  }
+}
+
+async function resumeResourceImportJobs() {
+  const jobs = await db.select().from(courseResourceImportJobsTable);
+  for (const job of jobs.filter(row => row.status === "queued" || row.status === "running")) {
+    const items = await db.select().from(courseResourceImportJobItemsTable)
+      .where(eq(courseResourceImportJobItemsTable.jobId, job.id));
+    for (const item of items.filter(row => row.status === "running")) {
+      await db.update(courseResourceImportJobItemsTable).set({ status: "pending", updatedAt: new Date() })
+        .where(eq(courseResourceImportJobItemsTable.id, item.id));
+    }
+    await db.update(courseResourceImportJobsTable).set({ status: "queued", cancelRequested: false, updatedAt: new Date() })
+      .where(eq(courseResourceImportJobsTable.id, job.id));
+    queueResourceImportJob(job.id);
+  }
+}
+
+router.get("/curriculum/resource-imports/latest", requireAdmin, async (_req, res) => {
+  try {
+    const jobs = await db.select().from(courseResourceImportJobsTable);
+    const latest = jobs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+    res.json(latest ? await getResourceImportJob(latest.id) : null);
+  } catch {
+    res.status(500).json({ error: "Could not load resource import status" });
+  }
+});
+
+router.post("/curriculum/resource-imports", requireAdmin, async (_req, res) => {
+  try {
+    const jobs = await db.select().from(courseResourceImportJobsTable);
+    if (jobs.some(job => job.status === "queued" || job.status === "running")) {
+      res.status(409).json({ error: "A resource import is already running" });
+      return;
+    }
+    const courses = await db.select().from(curriculumCoursesTable);
+    const jobId = `tri-resource-${randomBytes(8).toString("hex")}`;
+    await db.insert(courseResourceImportJobsTable).values({
+      id: jobId,
+      status: "queued",
+      totalCourses: courses.length,
+    });
+    if (courses.length) {
+      await db.insert(courseResourceImportJobItemsTable).values(courses.map((course) => ({
+        id: `tri-resource-item-${jobId}-${course.id}`,
+        jobId,
+        courseId: course.id,
+        courseName: course.name,
+        status: "pending",
+      })));
+    }
+    queueResourceImportJob(jobId);
+    res.status(202).json({ job: await getResourceImportJob(jobId) });
+  } catch {
+    res.status(500).json({ error: "Could not start resource import" });
+  }
+});
+
+router.post("/curriculum/resource-imports/:jobId/cancel", requireAdmin, async (req, res) => {
+  try {
+    const jobId = String(req.params.jobId);
+    const [job] = await db.select().from(courseResourceImportJobsTable)
+      .where(eq(courseResourceImportJobsTable.id, jobId));
+    if (!job) { res.status(404).json({ error: "Resource import not found" }); return; }
+    await db.update(courseResourceImportJobsTable).set({ cancelRequested: true, updatedAt: new Date() })
+      .where(eq(courseResourceImportJobsTable.id, jobId));
+    res.json({ job: await getResourceImportJob(jobId) });
+  } catch {
+    res.status(500).json({ error: "Could not cancel resource import" });
+  }
+});
+
+router.post("/curriculum/resource-imports/:jobId/retry", requireAdmin, async (req, res) => {
+  try {
+    const jobId = String(req.params.jobId);
+    const [job] = await db.select().from(courseResourceImportJobsTable)
+      .where(eq(courseResourceImportJobsTable.id, jobId));
+    if (!job) { res.status(404).json({ error: "Resource import not found" }); return; }
+    const items = await db.select().from(courseResourceImportJobItemsTable)
+      .where(eq(courseResourceImportJobItemsTable.jobId, jobId));
+    const unfinished = items.filter(item => item.status === "failed" || item.status === "pending");
+    for (const item of unfinished) {
+      await db.update(courseResourceImportJobItemsTable).set({
+        status: "pending",
+        error: null,
+        updatedAt: new Date(),
+      }).where(eq(courseResourceImportJobItemsTable.id, item.id));
+    }
+    await refreshResourceImportSummary(jobId, {
+      status: "queued",
+      cancelRequested: false,
+      finishedAt: null,
+    });
+    queueResourceImportJob(jobId);
+    res.status(202).json({ job: await getResourceImportJob(jobId) });
+  } catch {
+    res.status(500).json({ error: "Could not retry unfinished resource imports" });
+  }
+});
+
+router.get("/curriculum/resources/:resourceId/open", requireAdmin, async (req, res) => {
+  try {
+    const resourceId = String(req.params.resourceId);
+    const [resource] = await db.select().from(courseResourcesTable)
+      .where(eq(courseResourcesTable.id, resourceId));
+    if (!resource || resource.status !== "ready") {
+      res.status(404).json({ error: "Learning resource is not available" });
+      return;
+    }
+    if (!resource.storagePath) {
+      if (isTriByteUrl(resource.sourceUrl)) {
+        res.status(404).json({ error: "Learning resource is not available" });
+        return;
+      }
+      res.redirect(302, resource.sourceUrl);
+      return;
+    }
+    const file = await getStoredResource(resource.storagePath);
+    const [metadata] = await file.getMetadata();
+    res.setHeader("Content-Type", String(metadata.contentType ?? resource.mimeType ?? "application/octet-stream"));
+    res.setHeader("Content-Disposition", `inline; filename="${(resource.fileName || resource.title).replace(/"/g, "")}"`);
+    if (metadata.size) res.setHeader("Content-Length", String(metadata.size));
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    file.createReadStream().pipe(res);
+  } catch (error) {
+    logger.error({ error: publicResourceImportError(error) }, "Could not serve learning resource");
+    res.status(500).json({ error: "Could not open learning resource" });
+  }
+});
+
 setTimeout(() => { void resumeStructureImportJobs(); }, 1_000);
+setTimeout(() => { void resumeResourceImportJobs(); }, 1_200);
 
 /**
  * POST /api/curriculum/sync-tribyte

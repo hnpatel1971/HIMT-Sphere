@@ -232,6 +232,63 @@ export const courseStructureImportJobItems = pgTable("course_structure_import_jo
   updatedAt:         timestamp("updated_at").defaultNow().notNull(),
 });
 
+// ─── TriByte learning resources & resource-import jobs ────────────────────────
+
+export const courseResources = pgTable("course_resources", {
+  id:              text("id").primaryKey(),
+  courseId:        text("course_id").notNull(),       // curriculum_courses.id
+  topicId:         text("topic_id"),                   // course_topics.id, when attached to a topic
+  subtopicId:      text("subtopic_id"),                // course_subtopics.id, when attached to a sub-topic
+  sourceNid:       text("source_nid").default(""),     // TriByte node containing the resource
+  sourceIdentity:  text("source_identity").notNull().unique(),
+  sourceUrl:       text("source_url").notNull(),
+  title:           text("title").notNull(),
+  resourceType:    text("resource_type").notNull().default("Learning resource"),
+  mimeType:        text("mime_type").default(""),
+  fileName:        text("file_name").default(""),
+  sizeBytes:       integer("size_bytes"),
+  order:           integer("order").default(0),
+  status:          text("status").notNull().default("pending"), // pending | ready | failed | unsupported
+  storagePath:     text("storage_path"),               // /objects/… path in App Storage
+  checksum:        text("checksum"),
+  error:           text("error"),
+  createdAt:       timestamp("created_at").defaultNow().notNull(),
+  updatedAt:       timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const courseResourceImportJobs = pgTable("course_resource_import_jobs", {
+  id:                text("id").primaryKey(),
+  status:            text("status").notNull().default("queued"),
+  totalCourses:      integer("total_courses").notNull().default(0),
+  completedCourses:  integer("completed_courses").notNull().default(0),
+  importedResources: integer("imported_resources").notNull().default(0),
+  failedResources:   integer("failed_resources").notNull().default(0),
+  currentCourseId:   text("current_course_id"),
+  currentCourseName: text("current_course_name"),
+  cancelRequested:   boolean("cancel_requested").notNull().default(false),
+  startedAt:         timestamp("started_at"),
+  finishedAt:        timestamp("finished_at"),
+  createdAt:         timestamp("created_at").defaultNow().notNull(),
+  updatedAt:         timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const courseResourceImportJobItems = pgTable("course_resource_import_job_items", {
+  id:                 text("id").primaryKey(),
+  jobId:              text("job_id").notNull().references(() => courseResourceImportJobs.id, { onDelete: "cascade" }),
+  courseId:           text("course_id").notNull(),
+  courseName:         text("course_name").notNull(),
+  status:             text("status").notNull().default("pending"),
+  discoveredResources:integer("discovered_resources").notNull().default(0),
+  importedResources:  integer("imported_resources").notNull().default(0),
+  failedResources:    integer("failed_resources").notNull().default(0),
+  error:              text("error"),
+  attempts:           integer("attempts").notNull().default(0),
+  startedAt:          timestamp("started_at"),
+  finishedAt:         timestamp("finished_at"),
+  createdAt:          timestamp("created_at").defaultNow().notNull(),
+  updatedAt:          timestamp("updated_at").defaultNow().notNull(),
+});
+
 // ─── Application settings (key-value store) ──────────────────────────────────
 
 export const appSettings = pgTable("app_settings", {
@@ -295,3 +352,6 @@ export type InsertCourseSubtopic = typeof courseSubtopics.$inferInsert;
 
 export type CourseStructureImportJob = typeof courseStructureImportJobs.$inferSelect;
 export type CourseStructureImportJobItem = typeof courseStructureImportJobItems.$inferSelect;
+export type CourseResource = typeof courseResources.$inferSelect;
+export type CourseResourceImportJob = typeof courseResourceImportJobs.$inferSelect;
+export type CourseResourceImportJobItem = typeof courseResourceImportJobItems.$inferSelect;

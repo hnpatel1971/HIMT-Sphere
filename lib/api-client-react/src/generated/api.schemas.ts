@@ -46,6 +46,10 @@ export interface Activity {
   duration: string;
   status: string;
   protected: boolean;
+  /** @nullable */
+  resourceId: string | null;
+  /** @nullable */
+  openUrl: string | null;
 }
 
 export interface Topic {

@@ -323,8 +323,16 @@ function CourseDetailPage() {
     <div className="grid gap-7 xl:grid-cols-[1fr_360px]"><section className="rounded-xl border border-border bg-card shadow-xs p-5 sm:p-7"><div className="flex items-end justify-between"><div><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Course route</p><h2 className="mt-1 text-xl font-bold">Structure & activities</h2></div><span className="text-xs font-semibold text-muted-foreground">{course.topics.length} topics</span></div><div className="mt-7 space-y-3">{course.topics.map((topic, index) => <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} />)}</div></section><aside className="space-y-5"><section className="rounded-xl border border-border bg-card shadow-xs p-6"><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">At a glance</p><div className="mt-5 space-y-5"><div><div className="flex justify-between text-sm"><span className="text-muted-foreground">Progress</span><b>{course.progress}%</b></div><div className="mt-2"><ProgressBar value={course.progress} /></div></div><InfoLine label="Language" value={course.language} /><InfoLine label="Learners" value={String(course.learners)} /><InfoLine label="Status" value={course.status} /></div></section><section className="rounded-xl border border-border bg-muted/40 p-6"><div className="flex gap-3"><GraduationCap size={18} className="shrink-0 text-primary" /><div><h3 className="font-bold text-sm">What you will be able to do</h3><ul className="mt-3 space-y-2 text-sm leading-relaxed text-muted-foreground">{course.objectives.map((objective) => <li key={objective} className="flex gap-2"><Check size={14} className="mt-1 shrink-0 text-primary" />{objective}</li>)}</ul></div></div></section></aside></div>
   </div>;
 }
-function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) { return <div className={cx('overflow-hidden rounded-xl border border-border', topic.locked && 'opacity-60')}><button data-testid={`button-topic-${topic.id}`} onClick={onToggle} className="flex w-full items-center gap-4 p-4 text-left hover:bg-muted"><span className="text-xs font-semibold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-sm font-bold">{topic.title}</h3>{topic.locked && <LockKeyhole size={13} className="text-muted-foreground" />}</div><div className="mt-2 flex items-center gap-3"><ProgressBar value={topic.progress} accent="bg-primary" /><span className="text-[11px] font-semibold text-muted-foreground">{topic.progress}%</span></div></div><span className="hidden text-[11px] font-semibold text-muted-foreground sm:block">{topic.duration}</span><ChevronDown size={16} className={cx('text-muted-foreground', open && 'rotate-180')} /></button>{open && <div className="border-t border-border bg-muted/30 p-2">{topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>}</div>; }
-function ActivityRow({ activity }: { activity: ActivityType }) { return <button data-testid={`button-activity-${activity.id}`} className="flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-card"><span className={cx('grid h-7 w-7 place-items-center rounded-lg', activity.status.toLowerCase().includes('complete') ? 'bg-[hsl(var(--primary)/.15)] text-primary' : 'bg-card text-primary shadow-sm border border-border')}>{activity.status.toLowerCase().includes('complete') ? <Check size={14} /> : activity.protected ? <LockKeyhole size={13} /> : <PlayIcon />}</span><span className="min-w-0 flex-1 truncate text-xs font-semibold">{activity.title}</span><span className="text-[11px] font-semibold text-muted-foreground">{activity.duration}</span></button>; }
+function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) { return <div className={cx('overflow-hidden rounded-xl border border-border', topic.locked && 'opacity-60')}><button data-testid={`button-topic-${topic.id}`} onClick={onToggle} className="flex w-full items-center gap-4 p-4 text-left hover:bg-muted"><span className="text-xs font-semibold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-sm font-bold">{topic.title}</h3>{topic.locked && <LockKeyhole size={13} className="text-muted-foreground" />}</div><div className="mt-2 flex items-center gap-3"><ProgressBar value={topic.progress} accent="bg-primary" /><span className="text-[11px] font-semibold text-muted-foreground">{topic.progress}%</span></div></div><span className="hidden text-[11px] font-semibold text-muted-foreground sm:block">{topic.duration}</span><ChevronDown size={16} className={cx('text-muted-foreground', open && 'rotate-180')} /></button>{open && <div className="border-t border-border bg-muted/30 p-2">{topic.activities.length ? topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />) : <p className="px-3 py-4 text-xs text-muted-foreground">No learning resources have been migrated for this topic yet.</p>}</div>}</div>; }
+function ActivityRow({ activity }: { activity: ActivityType }) {
+  const isAvailable = Boolean(activity.openUrl);
+  return <button
+    data-testid={`button-activity-${activity.id}`}
+    onClick={() => { if (activity.openUrl) window.open(activity.openUrl, '_blank', 'noopener,noreferrer'); }}
+    disabled={!isAvailable}
+    className={cx('flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-card disabled:cursor-default disabled:hover:bg-transparent', isAvailable && 'cursor-pointer')}
+  ><span className={cx('grid h-7 w-7 place-items-center rounded-lg', activity.status.toLowerCase().includes('complete') ? 'bg-[hsl(var(--primary)/.15)] text-primary' : 'bg-card text-primary shadow-sm border border-border')}>{activity.status.toLowerCase().includes('complete') ? <Check size={14} /> : activity.protected ? <LockKeyhole size={13} /> : <PlayIcon />}</span><span className="min-w-0 flex-1 truncate text-xs font-semibold">{activity.title}</span><span className="text-[11px] font-semibold text-muted-foreground">{activity.duration}</span>{isAvailable && <Download size={14} className="text-primary" aria-label="Open learning resource" />}</button>;
+}
 function PlayIcon() { return <span className="ml-0.5 h-0 w-0 border-y-[4px] border-l-[6px] border-y-transparent border-l-current" />; }
 function InfoLine({ label, value }: { label: string; value: string }) { return <div className="flex justify-between border-t border-border pt-3 text-sm"><span className="text-muted-foreground">{label}</span><span className="font-semibold">{value}</span></div>; }
 
@@ -482,7 +490,7 @@ function UsersPage() {
         title="Users & roles"
         description="Keep learner, faculty and operations access aligned with the right programme group."
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button testId="button-import-users" variant="outline" onClick={() => setOpenImport(true)}>
               <Upload size={16} /> Import users
             </Button>
@@ -872,6 +880,15 @@ function CurriculumCoursesPage() {
     currentCourseId: string | null; currentCourseName: string | null; cancelRequested: boolean;
     items: StructureImportItem[];
   };
+  type ResourceImportItem = {
+    id: string; courseId: string; courseName: string; status: string;
+    discoveredResources: number; importedResources: number; failedResources: number; error: string | null; attempts: number;
+  };
+  type ResourceImportJob = {
+    id: string; status: string; totalCourses: number; completedCourses: number;
+    importedResources: number; failedResources: number; currentCourseId: string | null;
+    currentCourseName: string | null; cancelRequested: boolean; items: ResourceImportItem[];
+  };
   const TB_BASE = "https://admin.learn.himtelearning.com";
   const { data: rawCourses, loading: coursesLoading, refetch: refetchCourses } = useApi<ApiCourse[]>('/curriculum/list');
   const courses = (rawCourses ?? []).map(c => ({ ...c, group: c.groupName, appliedTags: c.appliedTags ?? [] }));
@@ -897,12 +914,15 @@ function CurriculumCoursesPage() {
   const [loginError,    setLoginError]    = useState('');
   const [pendingSync,   setPendingSync]   = useState(false); // run sync after login succeeds
   const [pendingBulkImport, setPendingBulkImport] = useState(false);
+  const [pendingResourceImport, setPendingResourceImport] = useState(false);
 
   // ── Bulk Course Structure import state ────────────────────────────────────
   const [bulkJob, setBulkJob] = useState<StructureImportJob | null>(null);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [replaceExistingStructures, setReplaceExistingStructures] = useState(false);
   const [startingBulkImport, setStartingBulkImport] = useState(false);
+  const [resourceJob, setResourceJob] = useState<ResourceImportJob | null>(null);
+  const [startingResourceImport, setStartingResourceImport] = useState(false);
 
   // Check session status once on mount
   useEffect(() => {
@@ -914,13 +934,21 @@ function CurriculumCoursesPage() {
     if (syncStatus) setLastSyncedAt(syncStatus.lastSyncedAt);
   }, [syncStatus]);
   useEffect(() => {
-    if (isAdmin) void refreshBulkImport();
+    if (isAdmin) {
+      void refreshBulkImport();
+      void refreshResourceImport();
+    }
   }, [isAdmin]);
   useEffect(() => {
     if (!bulkJob || !['queued', 'running'].includes(bulkJob.status)) return;
     const timer = window.setInterval(() => { void refreshBulkImport(); }, 2_000);
     return () => window.clearInterval(timer);
   }, [bulkJob?.id, bulkJob?.status]);
+  useEffect(() => {
+    if (!resourceJob || !['queued', 'running'].includes(resourceJob.status)) return;
+    const timer = window.setInterval(() => { void refreshResourceImport(); }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [resourceJob?.id, resourceJob?.status]);
 
   async function handleAdminLogin(e: FormEvent) {
     e.preventDefault();
@@ -933,6 +961,10 @@ function CurriculumCoursesPage() {
         setPendingBulkImport(false);
         setReplaceExistingStructures(false);
         setShowBulkImport(true);
+      }
+      if (pendingResourceImport) {
+        setPendingResourceImport(false);
+        void startResourceImport();
       }
     } catch (err) {
       setLoginError(String(err).replace(/^Error:\s*/, ''));
@@ -1043,6 +1075,65 @@ function CurriculumCoursesPage() {
     }
   }
 
+  async function refreshResourceImport() {
+    try {
+      const result = await apiFetch<ResourceImportJob | null>('/curriculum/resource-imports/latest');
+      setResourceJob(result);
+    } catch {
+      // Expired admin sessions are handled before any mutation is attempted.
+    }
+  }
+
+  function openResourceImport() {
+    if (!isAdmin) {
+      setPendingResourceImport(true);
+      setShowLogin(true);
+      return;
+    }
+    void startResourceImport();
+  }
+
+  async function startResourceImport() {
+    setStartingResourceImport(true);
+    try {
+      const result = await apiFetch<{ job: ResourceImportJob }>('/curriculum/resource-imports', 'POST');
+      setResourceJob(result.job);
+      toast({
+        title: 'Learning resource import started',
+        description: `Checking documents, recordings, and learning resources across ${result.job.totalCourses} courses.`,
+      });
+    } catch (err) {
+      const message = String(err);
+      if (message.includes('401') || message.includes('Unauthorized')) {
+        setIsAdmin(false); setPendingResourceImport(true); setShowLogin(true);
+      } else {
+        toast({ title: 'Could not start resource import', description: message, variant: 'destructive' });
+      }
+    } finally { setStartingResourceImport(false); }
+  }
+
+  async function cancelResourceImport() {
+    if (!resourceJob) return;
+    try {
+      const result = await apiFetch<{ job: ResourceImportJob }>(`/curriculum/resource-imports/${resourceJob.id}/cancel`, 'POST');
+      setResourceJob(result.job);
+      toast({ title: 'Stopping resource import', description: 'The current course will finish before the job stops.' });
+    } catch (err) {
+      toast({ title: 'Could not stop resource import', description: String(err), variant: 'destructive' });
+    }
+  }
+
+  async function retryResourceImport() {
+    if (!resourceJob) return;
+    try {
+      const result = await apiFetch<{ job: ResourceImportJob }>(`/curriculum/resource-imports/${resourceJob.id}/retry`, 'POST');
+      setResourceJob(result.job);
+      toast({ title: 'Resource import resumed', description: 'Failed and unfinished courses will be checked again.' });
+    } catch (err) {
+      toast({ title: 'Could not retry resource import', description: String(err), variant: 'destructive' });
+    }
+  }
+
   // ── Modal/menu state ──────────────────────────────────────────────────────
   const [showCreate,    setShowCreate]    = useState(false);
   const [showImport,    setShowImport]    = useState(false);
@@ -1068,6 +1159,8 @@ function CurriculumCoursesPage() {
   });
   const pendingBulkCourseCount = bulkJob?.items.filter(item => ["pending", "running"].includes(item.status)).length ?? 0;
   const retryableBulkCourseCount = pendingBulkCourseCount + (bulkJob?.failedCourses ?? 0);
+  const pendingResourceCourseCount = resourceJob?.items.filter(item => ["pending", "running"].includes(item.status)).length ?? 0;
+  const retryableResourceCourseCount = pendingResourceCourseCount + (resourceJob?.items.filter(item => item.status === "failed").length ?? 0);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   function toggleSelect(id: string) {
@@ -1150,8 +1243,15 @@ function CurriculumCoursesPage() {
               data-testid="button-import-all-structures"
               onClick={openBulkImport}
               disabled={bulkJob ? ['queued', 'running'].includes(bulkJob.status) : false}
-              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', bulkJob && ['queued', 'running'].includes(bulkJob.status) && 'opacity-60 cursor-not-allowed')}>
+              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', Boolean(bulkJob && ['queued', 'running'].includes(bulkJob.status)) && 'opacity-60 cursor-not-allowed')}>
               <Layers size={13}/> Import all structures
+            </button>
+            <button
+              data-testid="button-import-learning-resources"
+              onClick={openResourceImport}
+              disabled={startingResourceImport || (resourceJob ? ['queued', 'running'].includes(resourceJob.status) : false)}
+              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', Boolean(startingResourceImport || (resourceJob && ['queued', 'running'].includes(resourceJob.status))) && 'opacity-60 cursor-not-allowed')}>
+              <Download size={13}/> {startingResourceImport ? 'Starting…' : 'Import learning resources'}
             </button>
             <span className="text-xs font-medium text-gray-500 whitespace-nowrap" data-testid="text-last-synced">
               Last synced: {formatSyncDate(lastSyncedAt)}
@@ -1209,6 +1309,58 @@ function CurriculumCoursesPage() {
                 <strong>Courses needing attention:</strong>{' '}
                 {bulkJob.items.filter(item => item.status === 'failed').slice(0, 3).map(item => item.courseName).join(' · ')}
                 {bulkJob.failedCourses > 3 ? ` · and ${bulkJob.failedCourses - 3} more` : ''}
+              </div>
+            )}
+          </section>
+        )}
+
+        {resourceJob && (
+          <section data-testid="bulk-resource-import-status" className="rounded-xl border border-primary/20 bg-white p-5 shadow-xs">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Download size={17} className="text-primary" />
+                  <h2 className="font-bold text-gray-800">Learning resource import</h2>
+                  <span className={cx(
+                    'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                    resourceJob.status === 'completed' ? 'bg-emerald-100 text-emerald-700'
+                      : resourceJob.status === 'completed_with_failures' || resourceJob.status === 'failed' ? 'bg-red-100 text-red-700'
+                      : resourceJob.status === 'cancelled' ? 'bg-amber-100 text-amber-700'
+                      : 'bg-primary/10 text-primary'
+                  )}>{resourceJob.status.replaceAll('_', ' ')}</span>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  {resourceJob.completedCourses} of {resourceJob.totalCourses} courses checked
+                  {resourceJob.currentCourseName ? ` · Importing ${resourceJob.currentCourseName}` : ''}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {['queued', 'running'].includes(resourceJob.status) && (
+                  <button data-testid="button-cancel-resource-import" onClick={cancelResourceImport} className={cx(btn, 'text-amber-700 border-amber-200 hover:bg-amber-50')}>
+                    <X size={13}/> Stop after current
+                  </button>
+                )}
+                {retryableResourceCourseCount > 0 && !['queued', 'running'].includes(resourceJob.status) && (
+                  <button data-testid="button-retry-resource-import" onClick={retryResourceImport} className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5')}>
+                    <RefreshCw size={13}/> {pendingResourceCourseCount > 0
+                      ? `Resume ${retryableResourceCourseCount} unfinished`
+                      : `Retry ${retryableResourceCourseCount} failed`}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mt-4">
+              <ProgressBar value={resourceJob.totalCourses ? Math.round((resourceJob.completedCourses / resourceJob.totalCourses) * 100) : 0} />
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                <span><strong className="text-gray-700">{resourceJob.importedResources}</strong> resources imported</span>
+                <span><strong className={resourceJob.failedResources ? 'text-red-600' : 'text-gray-700'}>{resourceJob.failedResources}</strong> resources need attention</span>
+              </div>
+            </div>
+            {resourceJob.failedResources > 0 && (
+              <div className="mt-4 rounded-lg bg-red-50 px-3 py-2.5 text-xs text-red-700">
+                <strong>Courses needing attention:</strong>{' '}
+                {resourceJob.items.filter(item => item.status === 'failed').slice(0, 3).map(item => item.courseName).join(' · ')}
+                {resourceJob.items.filter(item => item.status === 'failed').length > 3 ? ' · and more' : ''}
               </div>
             )}
           </section>

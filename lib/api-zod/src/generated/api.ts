@@ -177,7 +177,9 @@ export const GetCourseResponse = zod.object({
   "type": zod.string(),
   "duration": zod.string(),
   "status": zod.string(),
-  "protected": zod.boolean()
+  "protected": zod.boolean(),
+  "resourceId": zod.string().nullable(),
+  "openUrl": zod.string().nullable()
 }))
 }))
 }))
