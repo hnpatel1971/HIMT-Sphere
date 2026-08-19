@@ -15,6 +15,8 @@ const RESOURCE_LANGUAGE = /\b(document|download|attachment|resource|recording|vi
 const MEDIA_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com|drive\.google\.com|onedrive\.live\.com|sharepoint\.com)\b/i;
 const VIDEO_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com)\b/i;
 const ADMIN_ONLY_PATH = /\/(user|reviewer|generate|apps|node\/\d+\/edit)(?:\/|$|\?)/i;
+const NAVIGATION_PATH = /\/(?:taxonomy\/term|reviewer\/topics|category)(?:\/|$|\?)/i;
+const TRIBYTE_FILE_PATH = /\/(?:sites\/(?:default|all)\/files|files|file|download)(?:\/|$)/i;
 
 function decodeHtml(value: string): string {
   return value
@@ -60,8 +62,12 @@ function toAbsoluteUrl(rawUrl: string, baseUrl: string): string | null {
 }
 
 function shouldKeep(url: string, context: string): boolean {
-  if (ADMIN_ONLY_PATH.test(url)) return false;
-  return FILE_EXTENSION.test(url) || MEDIA_HOST.test(url) || RESOURCE_LANGUAGE.test(context);
+  if (ADMIN_ONLY_PATH.test(url) || NAVIGATION_PATH.test(url)) return false;
+  if (FILE_EXTENSION.test(url) || MEDIA_HOST.test(url)) return true;
+  // TriByte commonly serves extensionless protected files through its download
+  // routes. A generic “video/resource” label alone is not enough: it also
+  // appears on taxonomy navigation links throughout the course pages.
+  return TRIBYTE_FILE_PATH.test(url) && RESOURCE_LANGUAGE.test(context);
 }
 
 /**

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 48" role="img" aria-label="HIMT Learning">
+  <rect width="48" height="48" rx="11" fill="#0b9d87"/>
+  <path fill="#fff" d="M14 12h6v8h8v-8h6v24h-6v-10h-8v10h-6z"/>
+  <text x="59" y="31" fill="#103743" font-family="Arial,sans-serif" font-size="19" font-weight="700">HIMT</text>
+</svg>

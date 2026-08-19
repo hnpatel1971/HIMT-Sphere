@@ -3,3 +3,5 @@
 - [TriByte admin access & scraping](tribyte-access.md) — login approach, all 95 real courses imported, exact button→URL mapping for all 6 course card actions.
 - [TriByte bulk structure imports](tribyte-bulk-imports.md) — resumable bulk migration defaults to preserving existing LMS structures.
 - [Bundled session-store assets](bundled-session-store-assets.md) — the API bundle must retain connect-pg-simple's SQL schema beside its entry point.
+- [Clerk learner auth routing](clerk-learner-auth-routing.md) — mount Clerk inside the Wouter router so its path callbacks keep browser and API sessions aligned.
+- [TriByte resource migration coverage](tribyte-resource-migration-coverage.md) — import course structures before resources, then scan authenticated topic content views.

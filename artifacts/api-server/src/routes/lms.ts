@@ -2,7 +2,8 @@ import { Router, type IRouter } from "express";
 import "express-session"; // ensure SessionData augmentation from auth.ts is loaded
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "crypto";
 import { Readable } from "stream";
-import { eq, ilike, or } from "drizzle-orm";
+import { and, eq, ilike, or } from "drizzle-orm";
+import { clerkClient, getAuth } from "@clerk/express";
 import { db, pool } from "@workspace/db";
 import { parseTriByteCoursePage, type TriByteScrapedCourse } from "../lib/tribyte-course-parser";
 import { parseTriByteResources, type ParsedTriByteResource } from "../lib/tribyte-resource-parser";
@@ -14,6 +15,8 @@ import {
   sessions as sessionsTable,
   certificates as certificatesTable,
   users as usersTable,
+  learnerIdentities as learnerIdentitiesTable,
+  learnerCourseAccess as learnerCourseAccessTable,
   programmes as programmesTable,
   programmeCourses as programmeCoursesTable,
   courseOutlines as courseOutlinesTable,
@@ -601,6 +604,7 @@ router.get("/courses/:courseId", async (req, res) => {
     const readyResources = resources
       .filter(resource => resource.status === "ready")
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const canOpenResources = await learnerCanAccessCourse(req, curriculumCourse.id);
     const resourceDuration = (size: number | null) => {
       if (!size) return "Available";
       if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
@@ -614,7 +618,7 @@ router.get("/courses/:courseId", async (req, res) => {
       status: "available",
       protected: false,
       resourceId: resource.id,
-      openUrl: req.session.isAdmin === true ? `/api/curriculum/resources/${resource.id}/open` : null,
+       openUrl: canOpenResources ? `/api/curriculum/resources/${resource.id}/open` : null,
     });
     const learnerTopics = topics.map(topic => ({
       id: topic.id,
@@ -1695,6 +1699,99 @@ function requireAdmin(
   res.status(401).json({ error: "Unauthorized — admin login required" });
 }
 
+type ResolvedLearner = {
+  clerkUserId: string;
+  userId: string;
+  email: string;
+};
+
+async function resolveLearner(req: import("express").Request): Promise<ResolvedLearner | null> {
+  const clerkUserId = getAuth(req).userId;
+  if (!clerkUserId) return null;
+
+  const [identity] = await db.select().from(learnerIdentitiesTable)
+    .where(eq(learnerIdentitiesTable.clerkUserId, clerkUserId));
+  if (identity) return identity;
+
+  // The email comes directly from Clerk's server API, never from the browser.
+  const clerkUser = await clerkClient.users.getUser(clerkUserId);
+  const email = clerkUser.primaryEmailAddress?.emailAddress?.trim().toLowerCase();
+  if (!email) throw new Error("Your learner account needs a verified email address");
+  const name = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ").trim()
+    || clerkUser.username
+    || email.split("@")[0];
+  const [existingUser] = await db.select().from(usersTable)
+    .where(ilike(usersTable.email, email));
+  const user = existingUser ?? (await db.insert(usersTable).values({
+    id: `learner-${randomBytes(10).toString("hex")}`,
+    name,
+    email,
+    role: "student",
+    status: "Active",
+    lastActivity: "Just now",
+  }).returning())[0];
+
+  const [createdIdentity] = await db.insert(learnerIdentitiesTable).values({
+    clerkUserId,
+    userId: user.id,
+    email,
+    updatedAt: new Date(),
+  }).onConflictDoNothing().returning();
+  return createdIdentity ?? (await db.select().from(learnerIdentitiesTable)
+    .where(eq(learnerIdentitiesTable.clerkUserId, clerkUserId)))[0];
+}
+
+async function learnerCanAccessCourse(req: import("express").Request, courseId: string): Promise<boolean> {
+  if (req.session.isAdmin === true) return true;
+  const learner = await resolveLearner(req);
+  if (!learner) return false;
+  const [access] = await db.select({ id: learnerCourseAccessTable.id })
+    .from(learnerCourseAccessTable)
+    .where(and(
+      eq(learnerCourseAccessTable.clerkUserId, learner.clerkUserId),
+      eq(learnerCourseAccessTable.courseId, courseId),
+    ));
+  return Boolean(access);
+}
+
+router.get("/learner/me", async (req, res) => {
+  try {
+    const learner = await resolveLearner(req);
+    if (!learner) { res.status(401).json({ error: "Learner sign-in required" }); return; }
+    const access = await db.select({ courseId: learnerCourseAccessTable.courseId })
+      .from(learnerCourseAccessTable)
+      .where(eq(learnerCourseAccessTable.clerkUserId, learner.clerkUserId));
+    res.json({ userId: learner.userId, email: learner.email, enrolledCourseIds: access.map(row => row.courseId) });
+  } catch (error) {
+    logger.error({ error }, "Could not provision learner identity");
+    res.status(400).json({ error: "Could not set up learner access" });
+  }
+});
+
+router.post("/curriculum/courses/:courseId/learner-access", requireAdmin, async (req, res) => {
+  const courseId = String(req.params.courseId);
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  if (!email) { res.status(400).json({ error: "A learner email is required" }); return; }
+  try {
+    const [course] = await db.select({ id: curriculumCoursesTable.id }).from(curriculumCoursesTable)
+      .where(eq(curriculumCoursesTable.id, courseId));
+    if (!course) { res.status(404).json({ error: "Course not found" }); return; }
+    const [identity] = await db.select().from(learnerIdentitiesTable)
+      .where(ilike(learnerIdentitiesTable.email, email));
+    if (!identity) {
+      res.status(409).json({ error: "The learner must sign in once before course access can be assigned" }); return;
+    }
+    await db.insert(learnerCourseAccessTable).values({
+      id: `course-access-${randomBytes(10).toString("hex")}`,
+      clerkUserId: identity.clerkUserId,
+      courseId: course.id,
+    }).onConflictDoNothing();
+    res.status(201).json({ courseId: course.id, email });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 // ─── Bulk Course Structure Import ─────────────────────────────────────────────
 
 const ACTIVE_STRUCTURE_IMPORT_STATUSES = new Set(["queued", "running"]);
@@ -2142,9 +2239,17 @@ async function collectCourseResources(
 
   for (const topic of topics) {
     if (!topic.nid) continue;
-    await addFromPage(`${TB_BASE_URL}/node/${topic.nid}`, {
+    const parent = {
       topicId: topic.id, subtopicId: null, sourceNid: topic.nid,
-    });
+    };
+    await addFromPage(`${TB_BASE_URL}/node/${topic.nid}`, parent);
+    // TriByte's learner-facing node can be deliberately sparse. Its
+    // authenticated content, metadata, and sub-topic views expose additional
+    // resource fields/embeds for the same topic; parser guards exclude their
+    // own navigation links.
+    await addFromPage(`${TB_BASE_URL}/node/${topic.nid}/edit/content`, parent);
+    await addFromPage(`${TB_BASE_URL}/node/${topic.nid}/edit/topic/tab`, parent);
+    await addFromPage(`${TB_BASE_URL}/node/${topic.nid}/edit/subtopics`, parent);
   }
   for (const subtopic of subtopics) {
     if (!subtopic.nid) continue;
@@ -2260,6 +2365,23 @@ async function importTriByteCourseResources(
   session: { cookie: string; strategy: string },
 ): Promise<ResourceImportResult> {
   const resources = await collectCourseResources(course, session);
+  const discoveredIdentities = new Set(
+    resources.map(resource => `${course.id}:${resource.sourceNid}:${resource.sourceUrl}`),
+  );
+  // A parser improvement can legitimately stop recognizing a bad navigation
+  // link. Remove only stale, non-stored failures; successful migrations are
+  // never deleted merely because a later page scan is incomplete.
+  const previous = await db.select().from(courseResourcesTable)
+    .where(eq(courseResourcesTable.courseId, course.id));
+  for (const resource of previous) {
+    if (
+      !discoveredIdentities.has(resource.sourceIdentity)
+      && !resource.storagePath
+      && resource.status !== "ready"
+    ) {
+      await db.delete(courseResourcesTable).where(eq(courseResourcesTable.id, resource.id));
+    }
+  }
   let imported = 0;
   let failed = 0;
   for (const [index, resource] of resources.entries()) {
@@ -2486,13 +2608,22 @@ router.post("/curriculum/resource-imports/:jobId/retry", requireAdmin, async (re
   }
 });
 
-router.get("/curriculum/resources/:resourceId/open", requireAdmin, async (req, res) => {
+router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
   try {
     const resourceId = String(req.params.resourceId);
     const [resource] = await db.select().from(courseResourcesTable)
       .where(eq(courseResourcesTable.id, resourceId));
     if (!resource || resource.status !== "ready") {
       res.status(404).json({ error: "Learning resource is not available" });
+      return;
+    }
+    if (!(await learnerCanAccessCourse(req, resource.courseId))) {
+      const signedIn = Boolean(getAuth(req).userId);
+      res.status(signedIn ? 403 : 401).json({
+        error: signedIn
+          ? "You are not enrolled in this course"
+          : "Learner sign-in required",
+      });
       return;
     }
     if (!resource.storagePath) {

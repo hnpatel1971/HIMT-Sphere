@@ -7,10 +7,12 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "test": "pnpm run build && node --test src/lib/tribyte-course-parser.test.ts src/routes/lms-users.test.ts",
+    "test": "pnpm run build && node --test src/lib/tribyte-course-parser.test.ts src/lib/tribyte-resource-parser.test.ts src/routes/lms-users.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@clerk/express": "^2.1.58",
+    "@clerk/shared": "^4.29.2",
     "@google-cloud/storage": "^8.0.0",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/express-session": "^1.19.0",
@@ -23,6 +25,7 @@
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "google-auth-library": "^11.0.2",
+    "http-proxy-middleware": "^4.2.0",
     "pino": "^9.14.0",
     "pino-http": "^10.5.0"
   },

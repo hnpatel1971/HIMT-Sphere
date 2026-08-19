@@ -66,6 +66,21 @@ export const users = pgTable("users", {
   createdAt:    timestamp("created_at").defaultNow().notNull(),
 });
 
+export const learnerIdentities = pgTable("learner_identities", {
+  clerkUserId: text("clerk_user_id").primaryKey(),
+  userId:      text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  email:       text("email").notNull(),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+  updatedAt:   timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const learnerCourseAccess = pgTable("learner_course_access", {
+  id:          text("id").primaryKey(),
+  clerkUserId: text("clerk_user_id").notNull().references(() => learnerIdentities.clerkUserId, { onDelete: "cascade" }),
+  courseId:    text("course_id").notNull(),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+});
+
 // ─── Learner-facing courses ───────────────────────────────────────────────────
 
 export const courses = pgTable("courses", {

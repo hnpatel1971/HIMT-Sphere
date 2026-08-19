@@ -3,9 +3,12 @@ import cors from "cors";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import pinoHttp from "pino-http";
+import { clerkMiddleware } from "@clerk/express";
+import { publishableKeyFromHost } from "@clerk/shared/keys";
 import { pool } from "@workspace/db";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { CLERK_PROXY_PATH, clerkProxyMiddleware, getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
 
 const sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret) {
@@ -41,6 +44,7 @@ app.use(
   }),
 );
 app.use(cors({ origin: true, credentials: true }));
+app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -61,6 +65,15 @@ app.use(
       maxAge: 8 * 60 * 60 * 1000, // 8 hours
     },
   }),
+);
+
+app.use(
+  clerkMiddleware((req) => ({
+    publishableKey: publishableKeyFromHost(
+      getClerkProxyHost(req) ?? "",
+      process.env.CLERK_PUBLISHABLE_KEY,
+    ),
+  })),
 );
 
 app.use("/api", router);
