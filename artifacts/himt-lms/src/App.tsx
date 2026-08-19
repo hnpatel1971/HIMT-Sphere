@@ -862,6 +862,16 @@ function CurriculumCoursesPage() {
     adaptiveUserName: string; status: string; appliedTags: string[];
     tribyteNid: string; tribyteTid: string; thumbUrl: string;
   };
+  type StructureImportItem = {
+    id: string; courseId: string; courseName: string; status: string;
+    importedTopics: number; importedSubtopics: number; error: string | null; attempts: number;
+  };
+  type StructureImportJob = {
+    id: string; status: string; replaceExisting: boolean; totalCourses: number;
+    completedCourses: number; importedCourses: number; skippedCourses: number; failedCourses: number;
+    currentCourseId: string | null; currentCourseName: string | null; cancelRequested: boolean;
+    items: StructureImportItem[];
+  };
   const TB_BASE = "https://admin.learn.himtelearning.com";
   const { data: rawCourses, loading: coursesLoading, refetch: refetchCourses } = useApi<ApiCourse[]>('/curriculum/list');
   const courses = (rawCourses ?? []).map(c => ({ ...c, group: c.groupName, appliedTags: c.appliedTags ?? [] }));
@@ -886,6 +896,13 @@ function CurriculumCoursesPage() {
   const [loginBusy,     setLoginBusy]     = useState(false);
   const [loginError,    setLoginError]    = useState('');
   const [pendingSync,   setPendingSync]   = useState(false); // run sync after login succeeds
+  const [pendingBulkImport, setPendingBulkImport] = useState(false);
+
+  // ── Bulk Course Structure import state ────────────────────────────────────
+  const [bulkJob, setBulkJob] = useState<StructureImportJob | null>(null);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [replaceExistingStructures, setReplaceExistingStructures] = useState(false);
+  const [startingBulkImport, setStartingBulkImport] = useState(false);
 
   // Check session status once on mount
   useEffect(() => {
@@ -896,6 +913,14 @@ function CurriculumCoursesPage() {
   useEffect(() => {
     if (syncStatus) setLastSyncedAt(syncStatus.lastSyncedAt);
   }, [syncStatus]);
+  useEffect(() => {
+    if (isAdmin) void refreshBulkImport();
+  }, [isAdmin]);
+  useEffect(() => {
+    if (!bulkJob || !['queued', 'running'].includes(bulkJob.status)) return;
+    const timer = window.setInterval(() => { void refreshBulkImport(); }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [bulkJob?.id, bulkJob?.status]);
 
   async function handleAdminLogin(e: FormEvent) {
     e.preventDefault();
@@ -904,6 +929,11 @@ function CurriculumCoursesPage() {
       await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
       setIsAdmin(true); setShowLogin(false); setLoginUser(''); setLoginPass('');
       if (pendingSync) { setPendingSync(false); void runSync(); }
+      if (pendingBulkImport) {
+        setPendingBulkImport(false);
+        setReplaceExistingStructures(false);
+        setShowBulkImport(true);
+      }
     } catch (err) {
       setLoginError(String(err).replace(/^Error:\s*/, ''));
     } finally { setLoginBusy(false); }
@@ -943,6 +973,71 @@ function CurriculumCoursesPage() {
   function handleSyncTriByte() {
     if (!isAdmin) { setShowLogin(true); setPendingSync(true); return; }
     void runSync();
+  }
+
+  async function refreshBulkImport() {
+    try {
+      const result = await apiFetch<{ job: StructureImportJob | null }>('/curriculum/structure-imports/latest');
+      setBulkJob(result.job);
+    } catch {
+      // A missing/expired admin session is handled when an admin action is used.
+    }
+  }
+
+  function openBulkImport() {
+    if (!isAdmin) {
+      setPendingBulkImport(true);
+      setShowLogin(true);
+      return;
+    }
+    setReplaceExistingStructures(false);
+    setShowBulkImport(true);
+  }
+
+  async function startBulkImport() {
+    setStartingBulkImport(true);
+    try {
+      const result = await apiFetch<{ job: StructureImportJob }>('/curriculum/structure-imports', 'POST', {
+        replaceExisting: replaceExistingStructures,
+      });
+      setBulkJob(result.job);
+      setShowBulkImport(false);
+      toast({
+        title: 'Course Structure import started',
+        description: `Processing ${result.job.totalCourses} TriByte courses in the background.`,
+      });
+    } catch (err) {
+      const message = String(err);
+      if (message.includes('401') || message.includes('Unauthorized')) {
+        setIsAdmin(false); setPendingBulkImport(true); setShowLogin(true);
+      } else {
+        toast({ title: 'Could not start import', description: message, variant: 'destructive' });
+      }
+    } finally {
+      setStartingBulkImport(false);
+    }
+  }
+
+  async function cancelBulkImport() {
+    if (!bulkJob) return;
+    try {
+      const result = await apiFetch<{ job: StructureImportJob }>(`/curriculum/structure-imports/${bulkJob.id}/cancel`, 'POST');
+      setBulkJob(result.job);
+      toast({ title: 'Stopping import', description: 'The current course will finish before the job stops.' });
+    } catch (err) {
+      toast({ title: 'Could not stop import', description: String(err), variant: 'destructive' });
+    }
+  }
+
+  async function retryBulkFailures() {
+    if (!bulkJob) return;
+    try {
+      const result = await apiFetch<{ job: StructureImportJob }>(`/curriculum/structure-imports/${bulkJob.id}/retry-failed`, 'POST');
+      setBulkJob(result.job);
+      toast({ title: 'Retry started', description: 'Only failed courses will be retried.' });
+    } catch (err) {
+      toast({ title: 'Could not retry failures', description: String(err), variant: 'destructive' });
+    }
   }
 
   // ── Modal/menu state ──────────────────────────────────────────────────────
@@ -1046,11 +1141,71 @@ function CurriculumCoursesPage() {
               className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', syncing && 'opacity-60 cursor-not-allowed')}>
               <RefreshCw size={13} className={syncing ? 'animate-spin' : ''}/> {syncing ? 'Syncing…' : 'Sync from TriByte'}
             </button>
+            <button
+              data-testid="button-import-all-structures"
+              onClick={openBulkImport}
+              disabled={bulkJob ? ['queued', 'running'].includes(bulkJob.status) : false}
+              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', bulkJob && ['queued', 'running'].includes(bulkJob.status) && 'opacity-60 cursor-not-allowed')}>
+              <Layers size={13}/> Import all structures
+            </button>
             <span className="text-xs font-medium text-gray-500 whitespace-nowrap" data-testid="text-last-synced">
               Last synced: {formatSyncDate(lastSyncedAt)}
             </span>
           </div>
         </div>
+
+        {/* Persistent bulk import progress — safe to revisit after a page refresh */}
+        {bulkJob && (
+          <section data-testid="bulk-structure-import-status" className="rounded-xl border border-primary/20 bg-white p-5 shadow-xs">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Layers size={17} className="text-primary" />
+                  <h2 className="font-bold text-gray-800">Bulk Course Structure import</h2>
+                  <span className={cx(
+                    'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                    bulkJob.status === 'completed' ? 'bg-emerald-100 text-emerald-700'
+                      : bulkJob.status === 'completed_with_errors' || bulkJob.status === 'failed' ? 'bg-red-100 text-red-700'
+                      : bulkJob.status === 'cancelled' ? 'bg-amber-100 text-amber-700'
+                      : 'bg-primary/10 text-primary'
+                  )}>{bulkJob.status.replaceAll('_', ' ')}</span>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  {bulkJob.completedCourses} of {bulkJob.totalCourses} courses processed
+                  {bulkJob.currentCourseName ? ` · Importing ${bulkJob.currentCourseName}` : ''}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {['queued', 'running'].includes(bulkJob.status) && (
+                  <button data-testid="button-cancel-structure-import" onClick={cancelBulkImport} className={cx(btn, 'text-amber-700 border-amber-200 hover:bg-amber-50')}>
+                    <X size={13}/> Stop after current
+                  </button>
+                )}
+                {bulkJob.failedCourses > 0 && !['queued', 'running'].includes(bulkJob.status) && (
+                  <button data-testid="button-retry-structure-import-failures" onClick={retryBulkFailures} className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5')}>
+                    <RefreshCw size={13}/> Retry {bulkJob.failedCourses} failed
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mt-4">
+              <ProgressBar value={bulkJob.totalCourses ? Math.round((bulkJob.completedCourses / bulkJob.totalCourses) * 100) : 0} />
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                <span><strong className="text-gray-700">{bulkJob.importedCourses}</strong> imported</span>
+                <span><strong className="text-gray-700">{bulkJob.skippedCourses}</strong> kept unchanged</span>
+                <span><strong className={bulkJob.failedCourses ? 'text-red-600' : 'text-gray-700'}>{bulkJob.failedCourses}</strong> failed</span>
+                {bulkJob.replaceExisting && <span className="text-amber-700">Existing structures were replaced</span>}
+              </div>
+            </div>
+            {bulkJob.failedCourses > 0 && (
+              <div className="mt-4 rounded-lg bg-red-50 px-3 py-2.5 text-xs text-red-700">
+                <strong>Courses needing attention:</strong>{' '}
+                {bulkJob.items.filter(item => item.status === 'failed').slice(0, 3).map(item => item.courseName).join(' · ')}
+                {bulkJob.failedCourses > 3 ? ` · and ${bulkJob.failedCourses - 3} more` : ''}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Filter card */}
         <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">
@@ -1230,6 +1385,39 @@ function CurriculumCoursesPage() {
       {/* ── Import modal ── */}
       {showImport && <CourseImportModal onClose={() => setShowImport(false)} onImport={handleImport}/>}
 
+      {/* ── Bulk Course Structure import modal ── */}
+      {showBulkImport && (
+        <Modal title="Import all Course Structures" onClose={() => setShowBulkImport(false)}>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-primary/15 bg-primary/5 p-3.5 text-sm text-gray-600">
+              <p className="font-semibold text-gray-800">Import all {courses.filter(course => course.tribyteTid).length} TriByte courses</p>
+              <p className="mt-1 text-xs leading-relaxed">The import runs on the server and continues if you close or refresh this page. Its progress and any failures remain available here.</p>
+            </div>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3">
+              <input
+                data-testid="checkbox-replace-existing-structures"
+                type="checkbox"
+                checked={replaceExistingStructures}
+                onChange={event => setReplaceExistingStructures(event.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-primary"
+              />
+              <span className="text-sm text-amber-900">
+                <strong>Replace existing structures</strong>
+                <span className="mt-0.5 block text-xs leading-relaxed text-amber-800">
+                  Leave this unchecked to import only courses that do not already have topics. Checking it removes existing topics and sub-topics first, including manual edits and faculty assignments.
+                </span>
+              </span>
+            </label>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-bulk-structure-import" variant="quiet" onClick={() => setShowBulkImport(false)}>Cancel</Button>
+              <Button testId="button-start-bulk-structure-import" onClick={startBulkImport} disabled={startingBulkImport}>
+                {startingBulkImport ? 'Starting…' : 'Start import'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* ── Edit modal ── */}
       {editCourse && (
         <Modal title="Edit Course" onClose={() => setEditCourse(null)}>
@@ -1285,7 +1473,7 @@ function CurriculumCoursesPage() {
 
       {/* ── Admin login modal (for Sync from TriByte) ── */}
       {showLogin && (
-        <Modal title="Admin login" onClose={() => { setShowLogin(false); setPendingSync(false); setLoginError(''); }}>
+        <Modal title="Admin login" onClose={() => { setShowLogin(false); setPendingSync(false); setPendingBulkImport(false); setLoginError(''); }}>
           <p className="mb-4 text-sm text-gray-500">Enter your LMS admin credentials to continue.</p>
           <form onSubmit={handleAdminLogin} className="space-y-4">
             <Field label="Username">
@@ -1301,7 +1489,7 @@ function CurriculumCoursesPage() {
             {loginError && <p className="text-sm text-red-600">{loginError}</p>}
             <div className="flex justify-end gap-2 pt-1">
               <Button testId="button-cancel-admin-login" variant="quiet"
-                onClick={() => { setShowLogin(false); setPendingSync(false); setLoginError(''); }}>
+                onClick={() => { setShowLogin(false); setPendingSync(false); setPendingBulkImport(false); setLoginError(''); }}>
                 Cancel
               </Button>
               <Button testId="button-submit-admin-login" type="submit" disabled={loginBusy}>

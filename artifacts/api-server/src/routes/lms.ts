@@ -17,6 +17,8 @@ import {
   curriculumCourses as curriculumCoursesTable,
   courseTopics as courseTopicsTable,
   courseSubtopics as courseSubtopicsTable,
+  courseStructureImportJobs as courseStructureImportJobsTable,
+  courseStructureImportJobItems as courseStructureImportJobItemsTable,
   groups as groupsTable,
   tags as tagsTable,
   glossaryTerms as glossaryTable,
@@ -24,6 +26,7 @@ import {
   faqCategories as faqTable,
   appSettings as appSettingsTable,
 } from "@workspace/db";
+import { logger } from "../lib/logger";
 import {
   AddCourseOutcomeBody,
   AddCourseOutcomeParams,
@@ -1020,6 +1023,139 @@ function extractDrupalNodeTitle(html: string): string | null {
     .trim() || null;
 }
 
+type StructureImportResult = {
+  outcome: "imported" | "skipped";
+  imported: number;
+  subtopicsImported: number;
+  reason?: string;
+};
+
+/**
+ * Import one course's TriByte structure. Bulk imports default to preserving any
+ * existing LMS structure; callers must explicitly opt in to replacement.
+ */
+async function importTriByteCourseTopics(
+  course: typeof curriculumCoursesTable.$inferSelect,
+  session: { cookie: string; strategy: string },
+  replaceExisting: boolean,
+): Promise<StructureImportResult> {
+  const courseId = course.id;
+  const tid = course.tribyteTid ?? "";
+  if (!tid) throw new Error("Course has no TriByte TID — cannot import");
+
+  const existingTopics = await db.select().from(courseTopicsTable)
+    .where(eq(courseTopicsTable.courseId, courseId));
+  if (existingTopics.length > 0 && !replaceExisting) {
+    return {
+      outcome: "skipped",
+      imported: 0,
+      subtopicsImported: 0,
+      reason: "Existing course structure kept safe",
+    };
+  }
+
+  const url = `${TB_BASE_URL}/reviewer/topics?cat=${tid}&catspec=true`;
+  const htmlRes = await fetch(url, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" },
+  });
+  if (!htmlRes.ok) throw new Error(`TriByte responded ${htmlRes.status}`);
+  const html = await htmlRes.text();
+  if (isTBLoginPage(html)) throw new Error("TriByte rejected the stored login — check the configured credentials");
+
+  interface LiNidItem {
+    pos: number; nid: string; innerStart: number; depth: number; innerHtml: string;
+  }
+  const nidItems: LiNidItem[] = [];
+  const liTagRe = /<li\b([^>]*)>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = liTagRe.exec(html)) !== null) {
+    const nidMatch = m[1].match(/\bdata-nid\s*=\s*["'](\d+)["']/i);
+    if (nidMatch) {
+      const innerStart = m.index + m[0].length;
+      nidItems.push({ pos: m.index, nid: nidMatch[1], innerStart, depth: 0, innerHtml: "" });
+    }
+  }
+
+  // Current TriByte carousels expose stable ordered "Edit sub-topics" links
+  // instead of data-nid attributes.
+  if (nidItems.length === 0) {
+    const seenNids = new Set<string>();
+    const subtopicLinkRe = /href=["'][^"']*\/node\/(\d+)\/edit\/subtopics[^"']*["']/gi;
+    while ((m = subtopicLinkRe.exec(html)) !== null) {
+      const nid = m[1];
+      if (!seenNids.has(nid)) {
+        seenNids.add(nid);
+        nidItems.push({ pos: m.index, nid, innerStart: m.index, depth: 0, innerHtml: "" });
+      }
+    }
+  }
+
+  for (const item of nidItems) {
+    const before = html.slice(0, item.pos);
+    item.depth = (before.match(/<li[\s>]/g) || []).length - (before.match(/<\/li>/g) || []).length;
+  }
+  for (const item of nidItems) {
+    const endPos = findLiBlockEnd(html, item.innerStart);
+    item.innerHtml = html.slice(item.innerStart, endPos);
+  }
+  if (nidItems.length === 0) throw new Error("TriByte returned no topic cards for this course");
+
+  const minDepth = Math.min(...nidItems.map(i => i.depth));
+  const topicItems = nidItems.filter(i => i.depth === minDepth);
+  const subItems = nidItems.filter(i => i.depth > minDepth);
+  const topicTitles = new Map<string, string>();
+  for (const topic of topicItems) {
+    const detailRes = await fetch(`${TB_BASE_URL}/node/${topic.nid}/edit/topic/tab`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" },
+    });
+    if (!detailRes.ok) continue;
+    const title = extractDrupalNodeTitle(await detailRes.text());
+    if (title) topicTitles.set(topic.nid, title);
+  }
+
+  if (replaceExisting) {
+    for (const topic of existingTopics) {
+      await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, topic.id));
+    }
+    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.courseId, courseId));
+  }
+
+  const topicRows = topicItems.map((topic, order) => ({
+    id: `ct-${tid}-${topic.nid}`,
+    courseId,
+    nid: topic.nid,
+    tid,
+    name: topicTitles.get(topic.nid) ?? extractTopicName(topic.innerHtml, topic.nid),
+    order,
+    thumbUrl: extractTopicThumb(topic.innerHtml),
+    faculty: "",
+  }));
+  if (topicRows.length) await db.insert(courseTopicsTable).values(topicRows).onConflictDoNothing();
+
+  let subtopicsInserted = 0;
+  const subOrderByTopic: Record<string, number> = {};
+  for (const sub of subItems) {
+    const parentTopic = [...topicItems].reverse().find(topic => topic.pos < sub.pos);
+    const topicRow = parentTopic ? topicRows.find(row => row.nid === parentTopic.nid) : undefined;
+    if (!topicRow) continue;
+    const subOrder = subOrderByTopic[topicRow.id] ?? 0;
+    subOrderByTopic[topicRow.id] = subOrder + 1;
+    await db.insert(courseSubtopicsTable).values({
+      id: `cs-${tid}-${sub.nid}`,
+      topicId: topicRow.id,
+      courseId,
+      nid: sub.nid,
+      name: extractTopicName(sub.innerHtml, sub.nid),
+      order: subOrder,
+    }).onConflictDoNothing();
+    subtopicsInserted++;
+  }
+
+  return { outcome: "imported", imported: topicRows.length, subtopicsImported: subtopicsInserted };
+}
+
 // Import topics (and sub-topics) from TriByte for a curriculum course.
 // Scrapes /reviewer/topics?cat={tid}&catspec=true, parses the carousel HTML,
 // and stores both top-level topics and any nested subtopics.
@@ -1403,6 +1539,314 @@ function requireAdmin(
   if (req.session.isAdmin === true) { next(); return; }
   res.status(401).json({ error: "Unauthorized — admin login required" });
 }
+
+// ─── Bulk Course Structure Import ─────────────────────────────────────────────
+
+const ACTIVE_STRUCTURE_IMPORT_STATUSES = new Set(["queued", "running"]);
+const activeStructureImportRunners = new Set<string>();
+const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+function structureImportJobId() {
+  return `tri-structure-${randomBytes(8).toString("hex")}`;
+}
+
+function publicImportError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/https?:\/\/\S+/g, "TriByte").slice(0, 500);
+}
+
+async function getStructureImportJob(jobId: string) {
+  const [job] = await db.select().from(courseStructureImportJobsTable)
+    .where(eq(courseStructureImportJobsTable.id, jobId));
+  if (!job) return null;
+  const items = await db.select().from(courseStructureImportJobItemsTable)
+    .where(eq(courseStructureImportJobItemsTable.jobId, jobId));
+  items.sort((a, b) => a.courseName.localeCompare(b.courseName));
+  return { ...job, items };
+}
+
+async function refreshStructureImportSummary(
+  jobId: string,
+  updates: Partial<{
+    status: string;
+    currentCourseId: string | null;
+    currentCourseName: string | null;
+    finishedAt: Date | null;
+  }> = {},
+) {
+  const items = await db.select().from(courseStructureImportJobItemsTable)
+    .where(eq(courseStructureImportJobItemsTable.jobId, jobId));
+  const completedCourses = items.filter(item => ["imported", "skipped", "failed"].includes(item.status)).length;
+  const importedCourses = items.filter(item => item.status === "imported").length;
+  const skippedCourses = items.filter(item => item.status === "skipped").length;
+  const failedCourses = items.filter(item => item.status === "failed").length;
+  await db.update(courseStructureImportJobsTable)
+    .set({
+      completedCourses,
+      importedCourses,
+      skippedCourses,
+      failedCourses,
+      updatedAt: new Date(),
+      ...updates,
+    })
+    .where(eq(courseStructureImportJobsTable.id, jobId));
+}
+
+function queueStructureImportJob(jobId: string) {
+  setTimeout(() => { void runStructureImportJob(jobId); }, 25);
+}
+
+async function runStructureImportJob(jobId: string): Promise<void> {
+  if (activeStructureImportRunners.has(jobId)) return;
+  activeStructureImportRunners.add(jobId);
+
+  try {
+    const [job] = await db.select().from(courseStructureImportJobsTable)
+      .where(eq(courseStructureImportJobsTable.id, jobId));
+    if (!job || job.cancelRequested || !ACTIVE_STRUCTURE_IMPORT_STATUSES.has(job.status)) return;
+
+    await db.update(courseStructureImportJobsTable)
+      .set({ status: "running", startedAt: job.startedAt ?? new Date(), updatedAt: new Date() })
+      .where(eq(courseStructureImportJobsTable.id, jobId));
+
+    let session = await resolveTriByteCookie();
+    if (!session) throw new Error("No TriByte credentials configured");
+    const items = await db.select().from(courseStructureImportJobItemsTable)
+      .where(eq(courseStructureImportJobItemsTable.jobId, jobId));
+
+    for (const item of items) {
+      if (!["pending", "running"].includes(item.status)) continue;
+      const [latestJob] = await db.select().from(courseStructureImportJobsTable)
+        .where(eq(courseStructureImportJobsTable.id, jobId));
+      if (latestJob?.cancelRequested) {
+        await refreshStructureImportSummary(jobId, {
+          status: "cancelled",
+          currentCourseId: null,
+          currentCourseName: null,
+          finishedAt: new Date(),
+        });
+        return;
+      }
+
+      await db.update(courseStructureImportJobItemsTable)
+        .set({
+          status: "running",
+          attempts: (item.attempts ?? 0) + 1,
+          startedAt: new Date(),
+          error: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(courseStructureImportJobItemsTable.id, item.id));
+      await db.update(courseStructureImportJobsTable)
+        .set({ currentCourseId: item.courseId, currentCourseName: item.courseName, updatedAt: new Date() })
+        .where(eq(courseStructureImportJobsTable.id, jobId));
+
+      try {
+        const [course] = await db.select().from(curriculumCoursesTable)
+          .where(eq(curriculumCoursesTable.id, item.courseId));
+        if (!course) throw new Error("Course was removed from the curriculum");
+
+        let result: StructureImportResult;
+        try {
+          result = await importTriByteCourseTopics(course, session, job.replaceExisting);
+        } catch (firstError) {
+          if (!/rejected the stored login|TriByte responded 401/i.test(publicImportError(firstError))) throw firstError;
+          invalidateTBSessionCache();
+          session = await resolveTriByteCookie();
+          if (!session) throw firstError;
+          result = await importTriByteCourseTopics(course, session, job.replaceExisting);
+        }
+
+        await db.update(courseStructureImportJobItemsTable)
+          .set({
+            status: result.outcome,
+            importedTopics: result.imported,
+            importedSubtopics: result.subtopicsImported,
+            error: result.reason ?? null,
+            finishedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(courseStructureImportJobItemsTable.id, item.id));
+      } catch (error) {
+        logger.warn({ jobId, courseId: item.courseId, err: publicImportError(error) }, "TriByte course structure import failed");
+        await db.update(courseStructureImportJobItemsTable)
+          .set({
+            status: "failed",
+            error: publicImportError(error),
+            finishedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(courseStructureImportJobItemsTable.id, item.id));
+      }
+
+      await refreshStructureImportSummary(jobId, { currentCourseId: null, currentCourseName: null });
+      await pause(250);
+    }
+
+    const finalJob = await getStructureImportJob(jobId);
+    if (!finalJob) return;
+    await refreshStructureImportSummary(jobId, {
+      status: finalJob.failedCourses > 0 ? "completed_with_errors" : "completed",
+      currentCourseId: null,
+      currentCourseName: null,
+      finishedAt: new Date(),
+    });
+  } catch (error) {
+    logger.error({ jobId, err: publicImportError(error) }, "TriByte course structure job could not start");
+    const items = await db.select().from(courseStructureImportJobItemsTable)
+      .where(eq(courseStructureImportJobItemsTable.jobId, jobId));
+    for (const item of items.filter(item => ["pending", "running"].includes(item.status))) {
+      await db.update(courseStructureImportJobItemsTable)
+        .set({ status: "failed", error: publicImportError(error), finishedAt: new Date(), updatedAt: new Date() })
+        .where(eq(courseStructureImportJobItemsTable.id, item.id));
+    }
+    await refreshStructureImportSummary(jobId, {
+      status: "failed",
+      currentCourseId: null,
+      currentCourseName: null,
+      finishedAt: new Date(),
+    });
+  } finally {
+    activeStructureImportRunners.delete(jobId);
+  }
+}
+
+async function resumeStructureImportJobs(): Promise<void> {
+  try {
+    const jobs = await db.select().from(courseStructureImportJobsTable);
+    for (const job of jobs.filter(job => ACTIVE_STRUCTURE_IMPORT_STATUSES.has(job.status))) {
+      const items = await db.select().from(courseStructureImportJobItemsTable)
+        .where(eq(courseStructureImportJobItemsTable.jobId, job.id));
+      for (const item of items.filter(item => item.status === "running")) {
+        await db.update(courseStructureImportJobItemsTable)
+          .set({ status: "pending", updatedAt: new Date() })
+          .where(eq(courseStructureImportJobItemsTable.id, item.id));
+      }
+      await db.update(courseStructureImportJobsTable)
+        .set({ status: "queued", currentCourseId: null, currentCourseName: null, updatedAt: new Date() })
+        .where(eq(courseStructureImportJobsTable.id, job.id));
+      queueStructureImportJob(job.id);
+    }
+  } catch (error) {
+    logger.warn({ err: publicImportError(error) }, "Could not resume TriByte course structure imports");
+  }
+}
+
+router.get("/curriculum/structure-imports/latest", requireAdmin, async (_req, res) => {
+  try {
+    const jobs = await db.select().from(courseStructureImportJobsTable);
+    const latest = jobs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+    res.json({ job: latest ? await getStructureImportJob(latest.id) : null });
+  } catch {
+    res.status(500).json({ error: "Could not load bulk import status" });
+  }
+});
+
+router.post("/curriculum/structure-imports", requireAdmin, async (req, res) => {
+  try {
+    const activeJob = (await db.select().from(courseStructureImportJobsTable))
+      .find(job => ACTIVE_STRUCTURE_IMPORT_STATUSES.has(job.status));
+    if (activeJob) {
+      res.status(409).json({ error: "A bulk Course Structure import is already running", job: await getStructureImportJob(activeJob.id) });
+      return;
+    }
+
+    const replaceExisting = req.body?.replaceExisting === true;
+    const courses = (await db.select().from(curriculumCoursesTable))
+      .filter(course => Boolean(course.tribyteTid));
+    if (!courses.length) {
+      res.status(400).json({ error: "No TriByte courses are available to import" });
+      return;
+    }
+
+    const jobId = structureImportJobId();
+    await db.insert(courseStructureImportJobsTable).values({
+      id: jobId,
+      status: "queued",
+      replaceExisting,
+      totalCourses: courses.length,
+    });
+    await db.insert(courseStructureImportJobItemsTable).values(courses.map(course => ({
+      id: `${jobId}:${course.id}`,
+      jobId,
+      courseId: course.id,
+      courseName: course.name,
+      status: "pending",
+    })));
+    queueStructureImportJob(jobId);
+    res.status(202).json({ job: await getStructureImportJob(jobId) });
+  } catch (error) {
+    req.log.error({ err: publicImportError(error) }, "Could not start TriByte course structure import");
+    res.status(500).json({ error: "Could not start bulk Course Structure import" });
+  }
+});
+
+router.post("/curriculum/structure-imports/:jobId/cancel", requireAdmin, async (req, res) => {
+  const jobId = String(req.params.jobId);
+  try {
+    const [job] = await db.select().from(courseStructureImportJobsTable)
+      .where(eq(courseStructureImportJobsTable.id, jobId));
+    if (!job) {
+      res.status(404).json({ error: "Bulk import job not found" });
+      return;
+    }
+    if (!ACTIVE_STRUCTURE_IMPORT_STATUSES.has(job.status)) {
+      res.status(409).json({ error: "This bulk import is no longer running" });
+      return;
+    }
+    await db.update(courseStructureImportJobsTable)
+      .set({ cancelRequested: true, updatedAt: new Date() })
+      .where(eq(courseStructureImportJobsTable.id, jobId));
+    res.json({ job: await getStructureImportJob(jobId) });
+  } catch {
+    res.status(500).json({ error: "Could not cancel bulk import" });
+  }
+});
+
+router.post("/curriculum/structure-imports/:jobId/retry-failed", requireAdmin, async (req, res) => {
+  const jobId = String(req.params.jobId);
+  try {
+    const [job] = await db.select().from(courseStructureImportJobsTable)
+      .where(eq(courseStructureImportJobsTable.id, jobId));
+    if (!job) {
+      res.status(404).json({ error: "Bulk import job not found" });
+      return;
+    }
+    if (ACTIVE_STRUCTURE_IMPORT_STATUSES.has(job.status)) {
+      res.status(409).json({ error: "Wait for the active import to finish before retrying failures" });
+      return;
+    }
+    const items = await db.select().from(courseStructureImportJobItemsTable)
+      .where(eq(courseStructureImportJobItemsTable.jobId, jobId));
+    const failures = items.filter(item => item.status === "failed");
+    if (!failures.length) {
+      res.status(409).json({ error: "There are no failed courses to retry" });
+      return;
+    }
+    for (const item of failures) {
+      await db.update(courseStructureImportJobItemsTable)
+        .set({ status: "pending", error: null, finishedAt: null, updatedAt: new Date() })
+        .where(eq(courseStructureImportJobItemsTable.id, item.id));
+    }
+    await db.update(courseStructureImportJobsTable)
+      .set({
+        status: "queued",
+        cancelRequested: false,
+        finishedAt: null,
+        currentCourseId: null,
+        currentCourseName: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(courseStructureImportJobsTable.id, jobId));
+    await refreshStructureImportSummary(jobId, { status: "queued", finishedAt: null });
+    queueStructureImportJob(jobId);
+    res.status(202).json({ job: await getStructureImportJob(jobId) });
+  } catch {
+    res.status(500).json({ error: "Could not retry failed course imports" });
+  }
+});
+
+setTimeout(() => { void resumeStructureImportJobs(); }, 1_000);
 
 /**
  * POST /api/curriculum/sync-tribyte

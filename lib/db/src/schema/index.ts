@@ -196,6 +196,42 @@ export const courseSubtopics = pgTable("course_subtopics", {
   createdAt:timestamp("created_at").defaultNow().notNull(),
 });
 
+// ─── Bulk TriByte course-structure imports ───────────────────────────────────
+
+export const courseStructureImportJobs = pgTable("course_structure_import_jobs", {
+  id:                text("id").primaryKey(),
+  status:            text("status").notNull().default("queued"),
+  replaceExisting:   boolean("replace_existing").notNull().default(false),
+  totalCourses:      integer("total_courses").notNull().default(0),
+  completedCourses:  integer("completed_courses").notNull().default(0),
+  importedCourses:   integer("imported_courses").notNull().default(0),
+  skippedCourses:    integer("skipped_courses").notNull().default(0),
+  failedCourses:     integer("failed_courses").notNull().default(0),
+  currentCourseId:   text("current_course_id"),
+  currentCourseName: text("current_course_name"),
+  cancelRequested:   boolean("cancel_requested").notNull().default(false),
+  startedAt:         timestamp("started_at"),
+  finishedAt:        timestamp("finished_at"),
+  createdAt:         timestamp("created_at").defaultNow().notNull(),
+  updatedAt:         timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const courseStructureImportJobItems = pgTable("course_structure_import_job_items", {
+  id:                text("id").primaryKey(),
+  jobId:             text("job_id").notNull().references(() => courseStructureImportJobs.id, { onDelete: "cascade" }),
+  courseId:          text("course_id").notNull(),
+  courseName:        text("course_name").notNull(),
+  status:            text("status").notNull().default("pending"),
+  importedTopics:    integer("imported_topics").notNull().default(0),
+  importedSubtopics: integer("imported_subtopics").notNull().default(0),
+  error:             text("error"),
+  attempts:          integer("attempts").notNull().default(0),
+  startedAt:         timestamp("started_at"),
+  finishedAt:        timestamp("finished_at"),
+  createdAt:         timestamp("created_at").defaultNow().notNull(),
+  updatedAt:         timestamp("updated_at").defaultNow().notNull(),
+});
+
 // ─── Application settings (key-value store) ──────────────────────────────────
 
 export const appSettings = pgTable("app_settings", {
@@ -256,3 +292,6 @@ export type InsertCourseTopic = typeof courseTopics.$inferInsert;
 
 export type CourseSubtopic       = typeof courseSubtopics.$inferSelect;
 export type InsertCourseSubtopic = typeof courseSubtopics.$inferInsert;
+
+export type CourseStructureImportJob = typeof courseStructureImportJobs.$inferSelect;
+export type CourseStructureImportJobItem = typeof courseStructureImportJobItems.$inferSelect;
