@@ -103,9 +103,11 @@ function statusTone(status = '') {
 function Shell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const current = [...navItems, ...adminItems].find((item) =>
-    item.href === '/' ? location === item.href : location === item.href || location.startsWith(item.href + '/')
-  ) || navItems[0];
+  const current = location === '/settings'
+    ? { href: '/settings', label: 'Settings', icon: Settings2 }
+    : ([...navItems, ...adminItems].find((item) =>
+        item.href === '/' ? location === item.href : location === item.href || location.startsWith(item.href + '/')
+      ) || navItems[0]);
   return (
     <div className="min-h-[100dvh] bg-background text-foreground">
       <aside className={cx('fixed inset-y-0 left-0 z-40 flex w-[254px] flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 lg:translate-x-0', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
@@ -128,7 +130,7 @@ function Shell({ children }: { children: ReactNode }) {
           </nav>
         </div>
         <div className="mt-auto p-4 border-t border-sidebar-border">
-          <button data-testid="button-settings" className="mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-white"><Settings2 size={18} /> Settings</button>
+          <Link href="/settings" data-testid="button-settings" className="mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-white" onClick={() => setMobileOpen(false)}><Settings2 size={18} /> Settings</Link>
           <div className="flex items-center gap-3 rounded-xl px-2 py-2 mt-2">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sidebar-primary text-xs font-bold text-sidebar-primary-foreground">AM</span>
             <div className="text-left flex-1 min-w-0">
@@ -3037,7 +3039,227 @@ function CurriculumOthersPage() {
   );
 }
 
-function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+// ─── SettingsPage ─────────────────────────────────────────────────────────────
+
+function SettingsPage() {
+  const { toast } = useToast();
+
+  // TriByte credentials
+  const [tbStatus, setTbStatus] = useState<{ configured: boolean; source: string | null; username: string | null } | null>(null);
+  const [tbLoading, setTbLoading] = useState(true);
+  const [tbUsername, setTbUsername] = useState('');
+  const [tbPassword, setTbPassword] = useState('');
+  const [tbSaving, setTbSaving] = useState(false);
+  const [tbTesting, setTbTesting] = useState(false);
+  const [tbTestResult, setTbTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Admin auth state
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginUser, setLoginUser] = useState('');
+  const [loginPass, setLoginPass] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState('');
+
+  useEffect(() => {
+    apiFetch<{ isAdmin: boolean }>('/auth/status')
+      .then(r => {
+        setIsAdmin(r.isAdmin);
+        if (r.isAdmin) loadTbStatus();
+      })
+      .catch(() => setIsAdmin(false));
+  }, []);
+
+  async function loadTbStatus() {
+    setTbLoading(true);
+    try {
+      const s = await apiFetch<{ configured: boolean; source: string | null; username: string | null }>('/tribyte/credentials');
+      setTbStatus(s);
+      if (s.username) setTbUsername(s.username);
+    } catch { /* 401 expected if not admin */ }
+    finally { setTbLoading(false); }
+  }
+
+  async function handleAdminLogin(e: FormEvent) {
+    e.preventDefault();
+    setLoginBusy(true); setLoginError('');
+    try {
+      await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
+      setIsAdmin(true); setShowLogin(false); setLoginUser(''); setLoginPass('');
+      loadTbStatus();
+    } catch (err) {
+      setLoginError(String(err).replace(/^Error:\s*/, ''));
+    } finally { setLoginBusy(false); }
+  }
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    if (!tbUsername.trim() || !tbPassword.trim()) {
+      toast({ title: 'Missing fields', description: 'Enter both username and password.', variant: 'destructive' });
+      return;
+    }
+    setTbSaving(true); setTbTestResult(null);
+    try {
+      await apiFetch('/tribyte/credentials', 'PUT', { username: tbUsername.trim(), password: tbPassword.trim() });
+      toast({ title: 'Credentials saved', description: 'TriByte credentials stored. The next import will log in automatically.' });
+      setTbPassword('');
+      await loadTbStatus();
+    } catch (err) {
+      toast({ title: 'Save failed', description: String(err).replace(/^Error:\s*/, ''), variant: 'destructive' });
+    } finally { setTbSaving(false); }
+  }
+
+  async function handleTest() {
+    setTbTesting(true); setTbTestResult(null);
+    try {
+      const body = tbUsername.trim() && tbPassword.trim()
+        ? { username: tbUsername.trim(), password: tbPassword.trim() }
+        : {};
+      const r = await apiFetch<{ ok: boolean; strategy?: string; error?: string }>('/tribyte/credentials/test', 'POST', body);
+      if (r.ok) {
+        setTbTestResult({ ok: true, message: `Connected successfully (via ${r.strategy ?? 'stored credentials'})` });
+      } else {
+        setTbTestResult({ ok: false, message: r.error ?? 'Connection test failed' });
+      }
+    } catch (err) {
+      setTbTestResult({ ok: false, message: String(err).replace(/^Error:\s*/, '') });
+    } finally { setTbTesting(false); }
+  }
+
+  async function handleDelete() {
+    if (!confirm('Remove stored TriByte credentials?')) return;
+    try {
+      await apiFetch('/tribyte/credentials', 'DELETE');
+      toast({ title: 'Credentials removed' });
+      setTbUsername(''); setTbPassword(''); setTbTestResult(null);
+      await loadTbStatus();
+    } catch (err) {
+      toast({ title: 'Failed to remove', description: String(err).replace(/^Error:\s*/, ''), variant: 'destructive' });
+    }
+  }
+
+  const isEnvSource = tbStatus?.source === 'env_session' || tbStatus?.source === 'env_userpass';
+
+  return (
+    <div className="max-w-2xl space-y-8">
+      <div>
+        <h1 className="text-2xl font-bold">Settings</h1>
+        <p className="mt-1 text-sm text-muted-foreground">System configuration for HIMT LMS administrators.</p>
+      </div>
+
+      {/* ── TriByte Connection ── */}
+      <section className="rounded-xl border border-border bg-card p-6 space-y-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold">TriByte Connection</h2>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Store your TriByte admin credentials once so the &ldquo;Import from TriByte&rdquo; button on Course
+              Structure pages works without manual cookie setup.
+            </p>
+          </div>
+          {tbStatus && (
+            <span className={cx('shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold', tbStatus.configured ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
+              {tbStatus.configured ? 'Connected' : 'Not configured'}
+            </span>
+          )}
+        </div>
+
+        {isAdmin === false && !showLogin && (
+          <div className="rounded-lg bg-muted/60 p-4 text-sm text-muted-foreground flex items-center gap-3">
+            <LockKeyhole size={16} className="shrink-0" />
+            <span>Admin login required to manage credentials.</span>
+            <Button testId="button-settings-admin-login" variant="outline" onClick={() => setShowLogin(true)}>Log in</Button>
+          </div>
+        )}
+
+        {isAdmin === true && (
+          <>
+            {tbLoading ? (
+              <p className="text-sm text-muted-foreground animate-pulse">Loading…</p>
+            ) : (
+              <>
+                {isEnvSource && (
+                  <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                    <span className="font-semibold text-foreground">Using environment variable credentials.</span>{' '}
+                    {tbStatus?.source === 'env_userpass'
+                      ? `Username: ${tbStatus.username}. These are set in Replit Secrets (TRIBYTE_USERNAME / TRIBYTE_PASSWORD) and take precedence over DB-stored credentials.`
+                      : 'A TRIBYTE_SESSION cookie is set in Replit Secrets. It takes precedence over DB-stored credentials.'}
+                  </div>
+                )}
+
+                {!isEnvSource && (
+                  <form onSubmit={handleSave} className="space-y-4">
+                    <Field label="TriByte username">
+                      <input
+                        data-testid="input-tribyte-username"
+                        value={tbUsername}
+                        onChange={e => setTbUsername(e.target.value)}
+                        placeholder="admin@himtelearning.com"
+                        autoComplete="username"
+                        className="form-input"
+                      />
+                    </Field>
+                    <Field label="Password">
+                      <input
+                        type="password"
+                        data-testid="input-tribyte-password"
+                        value={tbPassword}
+                        onChange={e => setTbPassword(e.target.value)}
+                        placeholder="••••••••"
+                        autoComplete="current-password"
+                        className="form-input"
+                      />
+                    </Field>
+
+                    {tbTestResult && (
+                      <div className={cx('rounded-lg p-3 text-sm font-medium', tbTestResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-destructive/10 text-destructive')}>
+                        {tbTestResult.ok ? '✓ ' : '✗ '}{tbTestResult.message}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <Button testId="button-save-tribyte-creds" type="submit" disabled={tbSaving}>
+                        {tbSaving ? 'Saving…' : 'Save credentials'}
+                      </Button>
+                      <Button testId="button-test-tribyte-creds" variant="outline" type="button" onClick={handleTest} disabled={tbTesting}>
+                        {tbTesting ? 'Testing…' : 'Test connection'}
+                      </Button>
+                      {tbStatus?.configured && (
+                        <Button testId="button-remove-tribyte-creds" variant="quiet" type="button" onClick={handleDelete}>Remove</Button>
+                      )}
+                    </div>
+                  </form>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </section>
+
+      {/* Admin login modal */}
+      {showLogin && (
+        <Modal title="Admin login required" onClose={() => setShowLogin(false)}>
+          <p className="mb-4 text-sm text-muted-foreground">Enter your HIMT admin credentials to manage settings.</p>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <Field label="Username">
+              <input required data-testid="input-settings-admin-username" value={loginUser} onChange={e => setLoginUser(e.target.value)} className="form-input" placeholder="admin username" />
+            </Field>
+            <Field label="Password">
+              <input required type="password" data-testid="input-settings-admin-password" value={loginPass} onChange={e => setLoginPass(e.target.value)} className="form-input" placeholder="••••••••" />
+            </Field>
+            {loginError && <p className="rounded-lg bg-destructive/10 p-3 text-sm font-semibold text-destructive">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-cancel-settings-login" variant="quiet" type="button" onClick={() => setShowLogin(false)}>Cancel</Button>
+              <Button testId="button-submit-settings-login" type="submit" disabled={loginBusy}>{loginBusy ? 'Logging in…' : 'Log in'}</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function AppRouter() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/settings" component={SettingsPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppRouter /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
 export default App;

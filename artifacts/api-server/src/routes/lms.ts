@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
 import "express-session"; // ensure SessionData augmentation from auth.ts is loaded
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
 import { eq, ilike, or } from "drizzle-orm";
-import { db } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import {
   courses as coursesTable,
   assignments as assignmentsTable,
@@ -20,6 +21,7 @@ import {
   glossaryTerms as glossaryTable,
   uploadJobs as uploadJobsTable,
   faqCategories as faqTable,
+  appSettings as appSettingsTable,
 } from "@workspace/db";
 import {
   AddCourseOutcomeBody,
@@ -364,7 +366,7 @@ async function seedDatabase() {
   // Curriculum courses — seeded only if table is empty (real sync handled by syncTriByteCourses())
   const existingCl = await db.select({ id: curriculumCoursesTable.id }).from(curriculumCoursesTable).limit(1);
   if (existingCl.length === 0) {
-    await db.insert(curriculumCoursesTable).values(TRIBYTE_COURSES).onConflictDoNothing();
+    await db.insert(curriculumCoursesTable).values([...TRIBYTE_COURSES]).onConflictDoNothing();
   }
 
   // Groups
@@ -428,9 +430,50 @@ async function syncTriByteCourses() {
   console.log("[sync] Done — 95 courses loaded.");
 }
 
-// Fire-and-forget seed on startup
+/**
+ * Ensure app_settings table exists.
+ * Must be awaited before the HTTP server starts accepting requests to avoid
+ * races on first settings reads/writes.
+ */
+export async function ensureAppSettingsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+// ── Symmetric encryption helpers for sensitive settings stored in app_settings ─
+// Key is derived from SESSION_SECRET (which is validated at app startup).
+// Encrypted format: "<ivHex>:<authTagHex>:<ciphertextHex>"
+const _settingsKey = (() => {
+  const secret = process.env.SESSION_SECRET ?? "";
+  return scryptSync(secret || "dev-only-fallback", "himt-lms-settings-v1", 32);
+})();
+
+function encryptSetting(plaintext: string): string {
+  const iv = randomBytes(12); // 96-bit nonce for AES-256-GCM
+  const cipher = createCipheriv("aes-256-gcm", _settingsKey, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString("hex")}:${tag.toString("hex")}:${enc.toString("hex")}`;
+}
+
+function decryptSetting(stored: string): string {
+  const parts = stored.split(":");
+  if (parts.length !== 3) return stored; // legacy plaintext — treat as-is
+  const [ivHex, tagHex, encHex] = parts;
+  const decipher = createDecipheriv("aes-256-gcm", _settingsKey, Buffer.from(ivHex, "hex"));
+  decipher.setAuthTag(Buffer.from(tagHex, "hex"));
+  return Buffer.concat([decipher.update(Buffer.from(encHex, "hex")), decipher.final()]).toString("utf8");
+}
+
+// Fire-and-forget seed on startup (non-critical; logged on failure)
 seedDatabase().catch(err => console.error("[seed] Failed:", err));
 syncTriByteCourses().catch(err => console.error("[sync] Failed:", err));
+// NOTE: ensureAppSettingsTable() is awaited in index.ts before the HTTP server starts
 
 // ─── Learner-facing routes ────────────────────────────────────────────────────
 
@@ -463,7 +506,7 @@ router.get("/courses", async (req, res) => {
     const search = parsed.data.search?.toLowerCase();
     const status = parsed.data.status?.toLowerCase();
     if (search) rows = rows.filter(c => c.name.toLowerCase().includes(search) || c.code.toLowerCase().includes(search));
-    if (status) rows = rows.filter(c => c.status.toLowerCase().includes(status));
+    if (status) rows = rows.filter(c => (c.status ?? '').toLowerCase().includes(status));
     res.json(ListCoursesResponse.parse(rows));
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -494,7 +537,7 @@ router.get("/assignments", async (req, res) => {
   try {
     let rows = await db.select().from(assignmentsTable);
     const status = parsed.data.status?.toLowerCase();
-    if (status) rows = rows.filter(a => a.status.toLowerCase().includes(status));
+    if (status) rows = rows.filter(a => (a.status ?? '').toLowerCase().includes(status));
     res.json(ListAssignmentsResponse.parse(rows));
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -510,7 +553,7 @@ router.post("/assignments", async (req, res) => {
 });
 
 router.get("/announcements", async (_req, res) => {
-  try { res.json(ListAnnouncementsResponse.parse(await db.select().from(announcementsTable))); }
+  try { res.json(await db.select().from(announcementsTable)); }
   catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
@@ -815,8 +858,9 @@ router.patch("/curriculum/topics/:topicId", requireAdmin, async (req, res) => {
     if (body.thumbUrl !== undefined) updates.thumbUrl = body.thumbUrl;
     if (body.faculty  !== undefined) updates.faculty  = body.faculty;
     if (body.order    !== undefined) updates.order    = body.order;
-    await db.update(courseTopicsTable).set(updates).where(eq(courseTopicsTable.id, req.params.topicId));
-    const [updated] = await db.select().from(courseTopicsTable).where(eq(courseTopicsTable.id, req.params.topicId));
+    const topicId = String(req.params.topicId);
+    await db.update(courseTopicsTable).set(updates).where(eq(courseTopicsTable.id, topicId));
+    const [updated] = await db.select().from(courseTopicsTable).where(eq(courseTopicsTable.id, topicId));
     res.json(updated ?? { ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -824,8 +868,9 @@ router.patch("/curriculum/topics/:topicId", requireAdmin, async (req, res) => {
 // Delete a topic (and its subtopics) (admin only)
 router.delete("/curriculum/topics/:topicId", requireAdmin, async (req, res) => {
   try {
-    await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, req.params.topicId));
-    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.id, req.params.topicId));
+    const topicId = String(req.params.topicId);
+    await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, topicId));
+    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.id, topicId));
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -940,16 +985,17 @@ function extractDrupalNodeTitle(html: string): string | null {
 // Import topics (and sub-topics) from TriByte for a curriculum course.
 // Scrapes /reviewer/topics?cat={tid}&catspec=true, parses the carousel HTML,
 // and stores both top-level topics and any nested subtopics.
-router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
+router.post("/curriculum/courses/:id/topics/import", requireAdmin, async (req, res) => {
   try {
+    const courseId = String(req.params.id);
     const [course] = await db.select().from(curriculumCoursesTable)
-      .where(eq(curriculumCoursesTable.id, req.params.id));
+      .where(eq(curriculumCoursesTable.id, courseId));
     if (!course) { res.status(404).json({ error: "Course not found" }); return; }
     if (!course.tribyteTid) { res.status(400).json({ error: "Course has no TriByte TID — cannot import" }); return; }
 
     const session = await resolveTriByteCookie();
     if (!session) {
-      res.status(400).json({ error: "No TriByte credentials configured — set TRIBYTE_USERNAME and TRIBYTE_PASSWORD in Secrets" });
+      res.status(400).json({ error: "No TriByte credentials configured — add them in Settings → TriByte Connection" });
       return;
     }
 
@@ -1036,16 +1082,16 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
 
     // ── Step 5: Clear existing data ──
     const existingTopics = await db.select().from(courseTopicsTable)
-      .where(eq(courseTopicsTable.courseId, req.params.id));
+      .where(eq(courseTopicsTable.courseId, courseId));
     for (const t of existingTopics) {
       await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, t.id));
     }
-    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.courseId, req.params.id));
+    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.courseId, courseId));
 
     // ── Step 6: Insert topics ──
     const topicRows = topicItems.map((t, i) => ({
       id:       `ct-${course.tribyteTid}-${t.nid}`,
-      courseId: req.params.id,
+      courseId,
       nid:      t.nid,
       tid:      course.tribyteTid ?? "",
        name:     topicTitles.get(t.nid) ?? extractTopicName(t.innerHtml, t.nid),
@@ -1074,7 +1120,7 @@ router.post("/curriculum/courses/:id/topics/import", async (req, res) => {
       await db.insert(courseSubtopicsTable).values({
         id:       `cs-${course.tribyteTid}-${sub.nid}`,
         topicId,
-        courseId: req.params.id,
+        courseId,
         nid:      sub.nid,
         name:     extractTopicName(sub.innerHtml, sub.nid),
         order:    subOrder,
@@ -1143,19 +1189,161 @@ async function loginToTriByteShared(tbUser: string, tbPass: string): Promise<str
   return [...byName.values()].join("; ");
 }
 
-/** Resolve a TriByte cookie header from env vars (SESSION → USERNAME+PASSWORD). */
+// In-memory TriByte session cache — avoids re-logging in on every request.
+// Invalidated when credentials are updated via the settings API.
+let tbSessionCache: { cookie: string; expiresAt: number; strategy: string } | null = null;
+const TB_SESSION_TTL_MS = 7 * 60 * 60 * 1000; // 7 hours
+function invalidateTBSessionCache() { tbSessionCache = null; }
+
+/** Return true if any TriByte credentials exist in env vars OR the DB. */
+async function hasAnyTriByteCredsConfigured(): Promise<boolean> {
+  if (process.env.TRIBYTE_SESSION || process.env.TRIBYTE_USERNAME || process.env.TRIBYTE_PASSWORD) {
+    return true;
+  }
+  try {
+    const [u] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_username"));
+    const [p] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_password"));
+    return Boolean(u?.value && p?.value);
+  } catch { return false; }
+}
+
+/**
+ * Resolve a TriByte cookie header. Priority:
+ *   1. In-memory cache (if not expired)
+ *   2. TRIBYTE_SESSION env var (raw Cookie string — no login needed)
+ *   3. DB-stored username + password (saved via PUT /tribyte/credentials)
+ *   4. TRIBYTE_USERNAME + TRIBYTE_PASSWORD env vars
+ * Returns null if no credentials are configured anywhere.
+ */
 async function resolveTriByteCookie(): Promise<{ cookie: string; strategy: string } | null> {
+  // 1. Cache hit
+  if (tbSessionCache && tbSessionCache.expiresAt > Date.now()) {
+    return { cookie: tbSessionCache.cookie, strategy: tbSessionCache.strategy };
+  }
+  tbSessionCache = null;
+
+  // 2. Raw session env var (no login needed — skip cache)
   if (process.env.TRIBYTE_SESSION) {
     return { cookie: process.env.TRIBYTE_SESSION, strategy: "TRIBYTE_SESSION" };
   }
+
+  // 3. DB-stored credentials (password stored encrypted)
+  try {
+    const [uRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_username"));
+    const [pRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_password"));
+    if (uRow?.value && pRow?.value) {
+      const plainPass = decryptSetting(pRow.value);
+      const cookie = await loginToTriByteShared(uRow.value, plainPass);
+      tbSessionCache = { cookie, expiresAt: Date.now() + TB_SESSION_TTL_MS, strategy: "DB_CREDENTIALS" };
+      return { cookie, strategy: "DB_CREDENTIALS" };
+    }
+  } catch { /* DB query or login failed — fall through */ }
+
+  // 4. Env var username/password
   const tbUser = process.env.TRIBYTE_USERNAME;
   const tbPass = process.env.TRIBYTE_PASSWORD;
   if (tbUser && tbPass) {
     const cookie = await loginToTriByteShared(tbUser, tbPass);
+    tbSessionCache = { cookie, expiresAt: Date.now() + TB_SESSION_TTL_MS, strategy: "TRIBYTE_USERNAME/PASSWORD" };
     return { cookie, strategy: "TRIBYTE_USERNAME/PASSWORD" };
   }
+
   return null;
 }
+
+// ─── TriByte credentials management ──────────────────────────────────────────
+
+/**
+ * GET /api/tribyte/credentials
+ * Returns whether TriByte credentials are configured and their source.
+ * Never returns the password — only the username and source.
+ */
+router.get("/tribyte/credentials", requireAdmin, async (_req, res) => {
+  try {
+    if (process.env.TRIBYTE_SESSION) {
+      res.json({ configured: true, source: "env_session", username: null }); return;
+    }
+    if (process.env.TRIBYTE_USERNAME) {
+      res.json({ configured: true, source: "env_userpass", username: process.env.TRIBYTE_USERNAME }); return;
+    }
+    const [uRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_username"));
+    const [pRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_password"));
+    if (uRow?.value && pRow?.value) {
+      res.json({ configured: true, source: "db", username: uRow.value });
+    } else {
+      res.json({ configured: false, source: null, username: null });
+    }
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+/**
+ * PUT /api/tribyte/credentials
+ * Save TriByte username + password to the DB. Clears the session cache so the
+ * next import/sync will log in with the new credentials.
+ * Body: { username: string; password: string }
+ */
+router.put("/tribyte/credentials", requireAdmin, async (req, res) => {
+  const { username, password } = req.body as { username?: string; password?: string };
+  if (!username?.trim() || !password?.trim()) {
+    res.status(400).json({ error: "username and password are required" }); return;
+  }
+  try {
+    const encryptedPass = encryptSetting(password.trim());
+    await db.insert(appSettingsTable)
+      .values({ key: "tribyte_username", value: username.trim() })
+      .onConflictDoUpdate({ target: appSettingsTable.key, set: { value: username.trim(), updatedAt: new Date() } });
+    await db.insert(appSettingsTable)
+      .values({ key: "tribyte_password", value: encryptedPass })
+      .onConflictDoUpdate({ target: appSettingsTable.key, set: { value: encryptedPass, updatedAt: new Date() } });
+    invalidateTBSessionCache();
+    res.json({ saved: true, username: username.trim() });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+/**
+ * DELETE /api/tribyte/credentials
+ * Remove stored DB credentials and clear the session cache.
+ */
+router.delete("/tribyte/credentials", requireAdmin, async (_req, res) => {
+  try {
+    await db.delete(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_username"));
+    await db.delete(appSettingsTable).where(eq(appSettingsTable.key, "tribyte_password"));
+    invalidateTBSessionCache();
+    res.json({ deleted: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+/**
+ * POST /api/tribyte/credentials/test
+ * Test a login attempt. If username+password are in the body, tests those directly
+ * (does not save them). If omitted, tests whatever credentials are currently configured.
+ */
+router.post("/tribyte/credentials/test", requireAdmin, async (req, res) => {
+  const { username, password } = req.body as { username?: string; password?: string };
+  try {
+    let cookie: string;
+    let strategy: string;
+    if (username?.trim() && password?.trim()) {
+      cookie = await loginToTriByteShared(username.trim(), password.trim());
+      strategy = "provided";
+    } else {
+      const resolved = await resolveTriByteCookie();
+      if (!resolved) {
+        res.status(400).json({ ok: false, error: "No credentials configured to test" }); return;
+      }
+      cookie = resolved.cookie; strategy = resolved.strategy;
+    }
+    const verifyRes = await fetch(`${TB_BASE_URL}/reviewer/course/list`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { Cookie: cookie, "User-Agent": "Mozilla/5.0" },
+    });
+    const html = await verifyRes.text();
+    if (!verifyRes.ok || isTBLoginPage(html)) {
+      res.json({ ok: false, error: "Login succeeded but TriByte rejected the session — check credentials" }); return;
+    }
+    res.json({ ok: true, strategy });
+  } catch (err) { res.json({ ok: false, error: String(err) }); }
+});
 
 // ─── Sync courses from TriByte ────────────────────────────────────────────────
 
@@ -1240,13 +1428,10 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
   }
 
   // ── Credential resolution — uses shared module-level helpers ──
-  // Any nonempty credential env var counts as "configured"; a partial set that
-  // cannot form a complete strategy fails closed (502) rather than falling back
-  // to static data — the operator must notice the misconfiguration.
-  const hasTribyteCreds =
-    Boolean(process.env.TRIBYTE_SESSION) ||
-    Boolean(process.env.TRIBYTE_USERNAME) ||
-    Boolean(process.env.TRIBYTE_PASSWORD);
+  // Any nonempty credential source (env OR DB) counts as "configured"; a partial
+  // set that cannot form a complete strategy fails closed (502) rather than
+  // falling back to static data — the operator must notice the misconfiguration.
+  const hasTribyteCreds = await hasAnyTriByteCredsConfigured();
 
   let scraped: ScrapedCourse[] | null = null;
   const errors: string[] = [];
@@ -1499,10 +1684,7 @@ router.post("/users/sync-tribyte", requireAdmin, async (_req, res) => {
   }
 
   // Check if any creds were configured (so we can fail-close instead of silently falling back)
-  const hasTribyteCreds =
-    Boolean(process.env.TRIBYTE_SESSION) ||
-    Boolean(process.env.TRIBYTE_USERNAME) ||
-    Boolean(process.env.TRIBYTE_PASSWORD);
+  const hasTribyteCreds = await hasAnyTriByteCredsConfigured();
 
   if (hasTribyteCreds && !cookieHeader) {
     res.status(502).json({

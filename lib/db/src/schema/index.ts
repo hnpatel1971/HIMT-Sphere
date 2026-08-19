@@ -196,6 +196,14 @@ export const courseSubtopics = pgTable("course_subtopics", {
   createdAt:timestamp("created_at").defaultNow().notNull(),
 });
 
+// ─── Application settings (key-value store) ──────────────────────────────────
+
+export const appSettings = pgTable("app_settings", {
+  key:       text("key").primaryKey(),
+  value:     text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // ─── Inferred types (used by API routes) ─────────────────────────────────────
 
 export type Group             = typeof groups.$inferSelect;
