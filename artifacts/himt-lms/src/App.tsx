@@ -1332,35 +1332,43 @@ function CourseStructurePage() {
   async function handleAddTopic(e: FormEvent) {
     e.preventDefault();
     if (!addName.trim()) return;
-    await apiFetch(`/curriculum/courses/${id}/topics`, 'POST', { name: addName.trim(), thumbUrl: addThumb.trim() });
-    setAddOpen(false); setAddName(''); setAddThumb('');
-    loadTopics();
-    toast({ title: 'Topic added' });
+    try {
+      await apiFetch(`/curriculum/courses/${id}/topics`, 'POST', { name: addName.trim(), thumbUrl: addThumb.trim() });
+      setAddOpen(false); setAddName(''); setAddThumb('');
+      loadTopics();
+      toast({ title: 'Topic added' });
+    } catch (err) { handle401(err); }
   }
 
   async function handleEditSave(e: FormEvent) {
     e.preventDefault();
     if (!editTopic) return;
-    await apiFetch(`/curriculum/topics/${editTopic.id}`, 'PATCH', { name: editName, thumbUrl: editThumb });
-    setEditTopic(null);
-    loadTopics();
-    toast({ title: 'Topic updated' });
+    try {
+      await apiFetch(`/curriculum/topics/${editTopic.id}`, 'PATCH', { name: editName, thumbUrl: editThumb });
+      setEditTopic(null);
+      loadTopics();
+      toast({ title: 'Topic updated' });
+    } catch (err) { handle401(err); }
   }
 
   async function handleDelete(topicId: string, name: string) {
     if (!confirm(`Delete topic "${name}"? This cannot be undone.`)) return;
-    await apiFetch(`/curriculum/topics/${topicId}`, 'DELETE');
-    loadTopics();
-    toast({ title: 'Topic deleted' });
+    try {
+      await apiFetch(`/curriculum/topics/${topicId}`, 'DELETE');
+      loadTopics();
+      toast({ title: 'Topic deleted' });
+    } catch (err) { handle401(err); }
   }
 
   async function handleSetFaculty(e: FormEvent) {
     e.preventDefault();
     if (!facultyTopic) return;
-    await apiFetch(`/curriculum/topics/${facultyTopic.id}`, 'PATCH', { faculty: facultyVal });
-    setFacultyTopic(null);
-    loadTopics();
-    toast({ title: 'Faculty assigned' });
+    try {
+      await apiFetch(`/curriculum/topics/${facultyTopic.id}`, 'PATCH', { faculty: facultyVal });
+      setFacultyTopic(null);
+      loadTopics();
+      toast({ title: 'Faculty assigned' });
+    } catch (err) { handle401(err); }
   }
 
   async function handleImport() {
@@ -1369,9 +1377,8 @@ function CourseStructurePage() {
       const result = await apiFetch<{ imported: number; message?: string }>(`/curriculum/courses/${id}/topics/import`, 'POST');
       loadTopics();
       toast({ title: `Imported ${result.imported} topic${result.imported !== 1 ? 's' : ''}`, description: result.message ?? '' });
-    } catch (e) {
-      toast({ title: 'Import failed', description: String(e) });
-    } finally { setImporting(false); }
+    } catch (err) { handle401(err); }
+    finally { setImporting(false); }
   }
 
   function toggleExpanded(topicId: string) {
@@ -1473,8 +1480,8 @@ function CourseStructurePage() {
             <ChevronLeft size={18} /> {course?.name ?? 'Course'}
           </button>
           <div className="flex items-center gap-2">
-            <button onClick={() => setAddOpen(true)} className={btn}><Plus size={13}/> Add Topic</button>
-            <button onClick={handleImport} disabled={importing} className={cx(btn, importing && 'opacity-50 cursor-not-allowed')}>
+            <button onClick={() => requireAdminThen(() => setAddOpen(true))} className={btn}><Plus size={13}/> Add Topic</button>
+            <button onClick={() => requireAdminThen(handleImport)} disabled={importing} className={cx(btn, importing && 'opacity-50 cursor-not-allowed')}>
               <RefreshCw size={13} className={importing ? 'animate-spin' : ''}/> Import from TriByte
             </button>
           </div>
@@ -1499,8 +1506,8 @@ function CourseStructurePage() {
             <p className="text-base font-semibold text-gray-500">No topics yet</p>
             <p className="mt-1 text-sm text-gray-400 max-w-xs">Add a topic manually or click "Import from TriByte" to pull the course structure automatically.</p>
             <div className="mt-5 flex gap-2">
-              <button onClick={() => setAddOpen(true)} className={btn}><Plus size={13}/> Add Topic</button>
-              <button onClick={handleImport} disabled={importing} className={btn}><RefreshCw size={13}/> Import from TriByte</button>
+              <button onClick={() => requireAdminThen(() => setAddOpen(true))} className={btn}><Plus size={13}/> Add Topic</button>
+              <button onClick={() => requireAdminThen(handleImport)} disabled={importing} className={btn}><RefreshCw size={13}/> Import from TriByte</button>
             </div>
           </div>
         )}
@@ -1561,13 +1568,13 @@ function CourseStructurePage() {
 
                     {/* Actions */}
                     <div className="shrink-0 flex items-center gap-2">
-                      <button onClick={() => { setEditTopic(topic); setEditName(topic.name); setEditThumb(topic.thumbUrl); }} className={btn}>
+                      <button onClick={() => requireAdminThen(() => { setEditTopic(topic); setEditName(topic.name); setEditThumb(topic.thumbUrl); })} className={btn}>
                         <Pencil size={12}/> Edit
                       </button>
-                      <button onClick={() => handleDelete(topic.id, topic.name)} className={cx(btn, 'text-red-500 border-red-100 hover:bg-red-50 hover:text-red-700')}>
+                      <button onClick={() => requireAdminThen(() => handleDelete(topic.id, topic.name))} className={cx(btn, 'text-red-500 border-red-100 hover:bg-red-50 hover:text-red-700')}>
                         <Trash2 size={12}/> Delete
                       </button>
-                      <button onClick={() => { setFacultyTopic(topic); setFacultyVal(topic.faculty ?? ''); }} className={btn}>
+                      <button onClick={() => requireAdminThen(() => { setFacultyTopic(topic); setFacultyVal(topic.faculty ?? ''); })} className={btn}>
                         <Users size={12}/> Set Faculty
                       </button>
                     </div>
