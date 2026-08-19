@@ -17,6 +17,7 @@ const VIDEO_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com)\b/i;
 const ADMIN_ONLY_PATH = /\/(user|reviewer|generate|apps|node\/\d+\/edit)(?:\/|$|\?)/i;
 const NAVIGATION_PATH = /\/(?:taxonomy\/term|reviewer\/topics|category)(?:\/|$|\?)/i;
 const TRIBYTE_FILE_PATH = /\/(?:sites\/(?:default|all)\/files|files|file|download)(?:\/|$)/i;
+const TRIBYTE_CONTENT_DOWNLOAD = /\/reviewer\/download\/clipping(?:\/|$|\?)/i;
 
 function decodeHtml(value: string): string {
   return value
@@ -33,8 +34,12 @@ function cleanHtml(value: string): string {
 
 function fileNameFromUrl(url: string): string {
   try {
-    const pathname = decodeURIComponent(new URL(url).pathname);
-    return pathname.split("/").filter(Boolean).at(-1) ?? "";
+    const parsed = new URL(url);
+    const pathname = decodeURIComponent(parsed.pathname);
+    const pathName = pathname.split("/").filter(Boolean).at(-1) ?? "";
+    if (pathName && pathName !== "clipping") return pathName;
+    const format = parsed.searchParams.get("format")?.toLowerCase();
+    return format ? `resource.${format}` : pathName;
   } catch {
     return "";
   }
@@ -42,6 +47,7 @@ function fileNameFromUrl(url: string): string {
 
 function resourceTypeFor(url: string, context: string): TriByteResourceType {
   if (VIDEO_HOST.test(url)) return "Video";
+  if (/[?&]format=pdf(?:&|$)/i.test(url)) return "Document";
   if (RECORDING_EXTENSION.test(url) || /\b(recording|audio|video)\b/i.test(context)) {
     return RECORDING_EXTENSION.test(url) ? "Recording" : "Video";
   }
@@ -55,6 +61,9 @@ function toAbsoluteUrl(rawUrl: string, baseUrl: string): string | null {
     const url = new URL(decodeHtml(rawUrl).trim(), baseUrl);
     if (!/^https?:$/i.test(url.protocol)) return null;
     url.hash = "";
+    // The admin-only download link includes the authenticated user's email.
+    // The server-side session is sufficient, so do not persist that PII.
+    url.searchParams.delete("uname");
     return url.href;
   } catch {
     return null;
@@ -62,6 +71,7 @@ function toAbsoluteUrl(rawUrl: string, baseUrl: string): string | null {
 }
 
 function shouldKeep(url: string, context: string): boolean {
+  if (TRIBYTE_CONTENT_DOWNLOAD.test(url)) return true;
   if (ADMIN_ONLY_PATH.test(url) || NAVIGATION_PATH.test(url)) return false;
   if (FILE_EXTENSION.test(url) || MEDIA_HOST.test(url)) return true;
   // TriByte commonly serves extensionless protected files through its download
@@ -79,6 +89,10 @@ function shouldKeep(url: string, context: string): boolean {
 export function parseTriByteResources(html: string, baseUrl: string): ParsedTriByteResource[] {
   const resources: ParsedTriByteResource[] = [];
   const seen = new Set<string>();
+  const formTitle = html
+    .match(/<input\b(?=[^>]*\bname=["']title["'])[^>]*>/i)?.[0]
+    ?.match(/\bvalue=["']([^"']*)["']/i)?.[1];
+  const pageTitle = formTitle ? cleanHtml(formTitle) : "";
   const add = (rawUrl: string, rawLabel: string) => {
     const sourceUrl = toAbsoluteUrl(rawUrl, baseUrl);
     if (!sourceUrl) return;
@@ -89,7 +103,9 @@ export function parseTriByteResources(html: string, baseUrl: string): ParsedTriB
     seen.add(sourceUrl);
     resources.push({
       sourceUrl,
-      title: cleanHtml(rawLabel) || fileName || "Learning resource",
+      title: (cleanHtml(rawLabel).toLowerCase() === "download" && pageTitle)
+        ? pageTitle
+        : cleanHtml(rawLabel) || pageTitle || fileName || "Learning resource",
       resourceType: resourceTypeFor(sourceUrl, context),
       fileName,
     });

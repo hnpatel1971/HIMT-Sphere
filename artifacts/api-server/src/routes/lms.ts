@@ -2108,6 +2108,11 @@ type ResourceParent = {
   sourceNid: string;
 };
 
+type DiscoveredNode = {
+  nid: string;
+  title: string;
+};
+
 type ResourceImportResult = {
   discovered: number;
   imported: number;
@@ -2119,6 +2124,12 @@ const MAX_RESOURCE_BYTES = 500 * 1024 * 1024;
 const TRIBYTE_RESOURCE_HOSTS = new Set([
   "admin.learn.himtelearning.com",
   "static.learn.himtelearning.com",
+]);
+const TRIBYTE_RESOURCE_REDIRECT_HOSTS = new Set([
+  // Confirmed destination for protected content downloaded from the authenticated
+  // TriByte clipping route. Keep this allow-list exact rather than permitting
+  // arbitrary S3 endpoints.
+  "videos-elearning-himtmarine-com.s3.ap-southeast-1.amazonaws.com",
 ]);
 const EXTERNAL_VIDEO_HOSTS = new Set([
   "youtu.be",
@@ -2150,7 +2161,12 @@ function isApprovedExternalVideoUrl(url: string): boolean {
 }
 
 function isApprovedDownloadUrl(url: string): boolean {
-  return isTriByteUrl(url);
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return TRIBYTE_RESOURCE_HOSTS.has(hostname) || TRIBYTE_RESOURCE_REDIRECT_HOSTS.has(hostname);
+  } catch {
+    return false;
+  }
 }
 
 async function fetchApprovedResource(
@@ -2210,20 +2226,80 @@ async function fetchTriByteResourcePage(
   return html;
 }
 
+function cleanTriByteText(value: string): string {
+  return value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTriByteNodes(
+  html: string,
+  pathPattern: RegExp,
+): DiscoveredNode[] {
+  const found: DiscoveredNode[] = [];
+  const seen = new Set<string>();
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = anchorPattern.exec(html)) !== null) {
+    const href = match[1].match(/\bhref\s*=\s*["']([^"']+)["']/i)?.[1] ?? "";
+    const nid = href.match(pathPattern)?.[1];
+    if (!nid || seen.has(nid)) continue;
+    seen.add(nid);
+    const title = match[1].match(/\btitle\s*=\s*["']([^"']+)["']/i)?.[1] ?? "";
+    found.push({
+      nid,
+      title: cleanTriByteText(title) || cleanTriByteText(match[2]) || `Content ${nid}`,
+    });
+  }
+  return found;
+}
+
+async function ensureTriByteSubtopic(
+  course: typeof curriculumCoursesTable.$inferSelect,
+  topic: typeof courseTopicsTable.$inferSelect,
+  discovered: DiscoveredNode,
+): Promise<typeof courseSubtopicsTable.$inferSelect> {
+  const id = `cs-${topic.tid}-${discovered.nid}`;
+  const [existing] = await db.select().from(courseSubtopicsTable)
+    .where(eq(courseSubtopicsTable.id, id));
+  if (existing) return existing;
+  const [created] = await db.insert(courseSubtopicsTable).values({
+    id,
+    topicId: topic.id,
+    courseId: course.id,
+    nid: discovered.nid,
+    name: discovered.title.slice(0, 500),
+    order: 0,
+  }).onConflictDoNothing().returning();
+  if (created) return created;
+  const [afterConflict] = await db.select().from(courseSubtopicsTable)
+    .where(eq(courseSubtopicsTable.id, id));
+  if (!afterConflict) throw new Error(`Could not persist TriByte sub-topic ${discovered.nid}`);
+  return afterConflict;
+}
+
 async function collectCourseResources(
   course: typeof curriculumCoursesTable.$inferSelect,
   session: { cookie: string; strategy: string },
 ): Promise<Array<ParsedTriByteResource & ResourceParent>> {
   const entries: Array<ParsedTriByteResource & ResourceParent> = [];
   const seen = new Set<string>();
-  const addFromPage = async (url: string, parent: ResourceParent) => {
-    const html = await fetchTriByteResourcePage(url, session);
+  const addFromHtml = (html: string, url: string, parent: ResourceParent) => {
     for (const resource of parseTriByteResources(html, url)) {
       const key = `${parent.sourceNid}:${resource.sourceUrl}`;
       if (seen.has(key)) continue;
       seen.add(key);
       entries.push({ ...resource, ...parent });
     }
+  };
+  const addFromPage = async (url: string, parent: ResourceParent) => {
+    const html = await fetchTriByteResourcePage(url, session);
+    addFromHtml(html, url, parent);
+    return html;
   };
 
   if (course.tribyteNid) {
@@ -2249,7 +2325,36 @@ async function collectCourseResources(
     // own navigation links.
     await addFromPage(`${TB_BASE_URL}/node/${topic.nid}/edit/content`, parent);
     await addFromPage(`${TB_BASE_URL}/node/${topic.nid}/edit/topic/tab`, parent);
-    await addFromPage(`${TB_BASE_URL}/node/${topic.nid}/edit/subtopics`, parent);
+    const subtopicsHtml = await addFromPage(
+      `${TB_BASE_URL}/node/${topic.nid}/edit/subtopics`,
+      parent,
+    );
+    const discoveredSubtopics = extractTriByteNodes(
+      subtopicsHtml,
+      /\/node\/(\d+)\/edit\/contents(?:[/?]|$)/i,
+    );
+    for (const discovered of discoveredSubtopics) {
+      const subtopic = await ensureTriByteSubtopic(course, topic, discovered);
+      const subtopicNid = subtopic.nid ?? discovered.nid;
+      const subtopicParent = {
+        topicId: topic.id,
+        subtopicId: subtopic.id,
+        sourceNid: subtopicNid,
+      };
+      await addFromPage(`${TB_BASE_URL}/node/${subtopicNid}`, subtopicParent);
+      const contentsUrl = `${TB_BASE_URL}/node/${subtopicNid}/edit/contents`;
+      const contentsHtml = await addFromPage(contentsUrl, subtopicParent);
+      const contentRecords = extractTriByteNodes(
+        contentsHtml,
+        /\/node\/(\d+)\/edit\/content\/tab(?:[/?]|$)/i,
+      );
+      for (const content of contentRecords) {
+        await addFromPage(
+          `${TB_BASE_URL}/node/${content.nid}/edit/content/tab`,
+          { ...subtopicParent, sourceNid: content.nid },
+        );
+      }
+    }
   }
   for (const subtopic of subtopics) {
     if (!subtopic.nid) continue;

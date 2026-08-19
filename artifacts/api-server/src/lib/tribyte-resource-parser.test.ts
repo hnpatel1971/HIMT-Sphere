@@ -21,3 +21,17 @@ test("does not mistake TriByte taxonomy navigation for a learning resource", () 
 
   assert.deepEqual(resources, []);
 });
+
+test("keeps TriByte protected PDF downloads without persisting the admin email", () => {
+  const resources = parseTriByteResources(`
+    <input name="title" value="01. Introduction to ME-GI Marts" />
+    <a href="/reviewer/download/clipping?nid=484891&amp;uname=admin@example.com&amp;format=pdf">Download</a>
+  `, "https://admin.learn.himtelearning.com/node/484891/edit/content/tab");
+
+  assert.deepEqual(resources, [{
+    sourceUrl: "https://admin.learn.himtelearning.com/reviewer/download/clipping?nid=484891&format=pdf",
+    title: "01. Introduction to ME-GI Marts",
+    resourceType: "Document",
+    fileName: "resource.pdf",
+  }]);
+});
