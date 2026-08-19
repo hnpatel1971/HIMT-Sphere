@@ -1352,6 +1352,7 @@ router.post("/tribyte/credentials/test", requireAdmin, async (req, res) => {
 });
 
 // ─── Sync courses from TriByte ────────────────────────────────────────────────
+const TRIBYTE_COURSES_LAST_SYNCED_KEY = "tribyte_courses_last_synced_at";
 
 /**
  * Middleware: require an active authenticated admin session.
@@ -1385,6 +1386,17 @@ function requireAdmin(
  * strategies fail, the endpoint returns 502 with the error details rather than
  * silently falling back to stale data.
  */
+router.get("/curriculum/sync-status", async (_req, res) => {
+  try {
+    const [setting] = await db.select({ value: appSettingsTable.value })
+      .from(appSettingsTable)
+      .where(eq(appSettingsTable.key, TRIBYTE_COURSES_LAST_SYNCED_KEY));
+    res.json({ lastSyncedAt: setting?.value ?? null });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
   // ── Scrape all paginated pages of /reviewer/course/list ──
   async function scrapeAllCourses(cookieHeader: string): Promise<TriByteScrapedCourse[]> {
@@ -1474,7 +1486,26 @@ router.post("/curriculum/sync-tribyte", requireAdmin, async (_req, res) => {
       }
     }
 
-    res.json({ added, updated, total: scraped.length, usedStaticFallback, strategyErrors: errors });
+    const lastSyncedAt = new Date();
+    await db.insert(appSettingsTable)
+      .values({
+        key: TRIBYTE_COURSES_LAST_SYNCED_KEY,
+        value: lastSyncedAt.toISOString(),
+        updatedAt: lastSyncedAt,
+      })
+      .onConflictDoUpdate({
+        target: appSettingsTable.key,
+        set: { value: lastSyncedAt.toISOString(), updatedAt: lastSyncedAt },
+      });
+
+    res.json({
+      added,
+      updated,
+      total: scraped.length,
+      usedStaticFallback,
+      strategyErrors: errors,
+      lastSyncedAt: lastSyncedAt.toISOString(),
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

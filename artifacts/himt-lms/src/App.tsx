@@ -91,6 +91,19 @@ function formatUploadDate(value: string | null | undefined): string {
   const h12   = hours % 12 || 12;
   return `${day}-${mon}-${year} ${h12}:${mins}:${secs} ${ampm}`;
 }
+function formatSyncDate(value: string | null | undefined): string {
+  if (!value) return 'Never';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const day = d.getDate();
+  const month = MONTHS_SHORT[d.getMonth()];
+  const year = d.getFullYear();
+  const hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours < 12 ? 'AM' : 'PM';
+  const hour12 = hours % 12 || 12;
+  return `${day} ${month} ${year}, ${hour12}:${minutes} ${ampm}`;
+}
 function initials(name = 'HIMT') { return name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase(); }
 function statusTone(status = '') {
   const s = status.toLowerCase();
@@ -773,6 +786,8 @@ function CurriculumCoursesPage() {
   const TB_BASE = "https://admin.learn.himtelearning.com";
   const { data: rawCourses, loading: coursesLoading, refetch: refetchCourses } = useApi<ApiCourse[]>('/curriculum/list');
   const courses = (rawCourses ?? []).map(c => ({ ...c, group: c.groupName, appliedTags: c.appliedTags ?? [] }));
+  const { data: syncStatus, refetch: refetchSyncStatus } = useApi<{ lastSyncedAt: string | null }>('/curriculum/sync-status');
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const { data: allTags } = useApi<{ id: string; name: string }[]>('/curriculum/tags');
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -799,6 +814,9 @@ function CurriculumCoursesPage() {
       .then(r => setIsAdmin(r.isAdmin))
       .catch(() => setIsAdmin(false));
   }, []);
+  useEffect(() => {
+    if (syncStatus) setLastSyncedAt(syncStatus.lastSyncedAt);
+  }, [syncStatus]);
 
   async function handleAdminLogin(e: FormEvent) {
     e.preventDefault();
@@ -818,9 +836,10 @@ function CurriculumCoursesPage() {
   async function runSync() {
     setSyncing(true);
     try {
-      const result = await apiFetch<{ added: number; updated: number; total: number; usedStaticFallback: boolean }>(
+      const result = await apiFetch<{ added: number; updated: number; total: number; usedStaticFallback: boolean; lastSyncedAt: string }>(
         '/curriculum/sync-tribyte', 'POST',
       );
+      setLastSyncedAt(result.lastSyncedAt);
       const parts: string[] = [];
       if (result.added   > 0) parts.push(`${result.added} new course${result.added   !== 1 ? 's' : ''} added`);
       if (result.updated > 0) parts.push(`${result.updated} updated`);
@@ -830,6 +849,7 @@ function CurriculumCoursesPage() {
         description: parts.join(' · ') + (result.usedStaticFallback ? ' (static data — configure TriByte credentials for live sync)' : ''),
       });
       refetchCourses();
+      refetchSyncStatus();
     } catch (err) {
       const msg = String(err);
       // Session expired → prompt for re-login
@@ -947,6 +967,9 @@ function CurriculumCoursesPage() {
               className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', syncing && 'opacity-60 cursor-not-allowed')}>
               <RefreshCw size={13} className={syncing ? 'animate-spin' : ''}/> {syncing ? 'Syncing…' : 'Sync from TriByte'}
             </button>
+            <span className="text-xs font-medium text-gray-500 whitespace-nowrap" data-testid="text-last-synced">
+              Last synced: {formatSyncDate(lastSyncedAt)}
+            </span>
           </div>
         </div>
 

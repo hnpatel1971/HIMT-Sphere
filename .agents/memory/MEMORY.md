@@ -1,3 +1,4 @@
 - [OpenAPI numeric compatibility](generated-zod-integers.md) — generated integer fields currently target a newer Zod helper than this workspace provides.
 - [DB-backed LMS architecture](lms-db-architecture.md) — all curriculum pages now call real API; seed runs once on server start.
 - [TriByte admin access & scraping](tribyte-access.md) — login approach, all 95 real courses imported, exact button→URL mapping for all 6 course card actions.
+- [Bundled session-store assets](bundled-session-store-assets.md) — the API bundle must retain connect-pg-simple's SQL schema beside its entry point.
