@@ -50,6 +50,9 @@ import {
   ListProgrammesResponse,
   ListSessionsResponse,
   ListUsersResponse,
+  UpdateUserGroupBody,
+  UpdateUserGroupParams,
+  UpdateUserGroupResponse,
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
@@ -584,6 +587,40 @@ router.get("/users", async (_req, res) => {
     res.json(ListUsersResponse.parse(mapped));
   }
   catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+router.patch("/users/:userId", requireAdmin, async (req, res) => {
+  const params = UpdateUserGroupParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+  const body = UpdateUserGroupBody.safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({ error: body.error.message });
+    return;
+  }
+
+  try {
+    const [group] = await db.select().from(groupsTable).where(eq(groupsTable.name, body.data.group));
+    if (!group) {
+      res.status(404).json({ error: "Group not found" });
+      return;
+    }
+
+    const [user] = await db.update(usersTable)
+      .set({ groupName: group.name })
+      .where(eq(usersTable.id, params.data.userId))
+      .returning();
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    res.json(UpdateUserGroupResponse.parse({ ...user, group: user.groupName ?? "" }));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 // ─── OBE / Academic routes ────────────────────────────────────────────────────

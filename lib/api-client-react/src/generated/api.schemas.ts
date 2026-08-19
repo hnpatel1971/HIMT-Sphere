@@ -124,6 +124,11 @@ export interface User {
   lastActivity: string;
 }
 
+export interface UserGroupUpdate {
+  /** @minLength 1 */
+  group: string;
+}
+
 export interface UserImportInput {
   filename: string;
   /** @minimum 1 */

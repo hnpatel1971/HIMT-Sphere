@@ -309,6 +309,31 @@ export const ListUsersResponse = zod.array(ListUsersResponseItem)
 
 
 /**
+ * @summary Update a user's group
+ */
+export const UpdateUserGroupParams = zod.object({
+  "userId": zod.coerce.string()
+})
+
+
+
+
+export const UpdateUserGroupBody = zod.object({
+  "group": zod.string().min(1)
+})
+
+export const UpdateUserGroupResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.string(),
+  "group": zod.string(),
+  "status": zod.string(),
+  "lastActivity": zod.string()
+})
+
+
+/**
  * @summary List academic programmes
  */
 export const ListProgrammesResponseItem = zod.object({

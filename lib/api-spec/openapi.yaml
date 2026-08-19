@@ -216,6 +216,42 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/User"
+  /users/{userId}:
+    patch:
+      operationId: updateUserGroup
+      tags: [administration]
+      summary: Update a user's group
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserGroupUpdate"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Invalid user or group
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: User or group not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /curriculum/programmes:
     get:
       operationId: listProgrammes
@@ -470,6 +506,11 @@ components:
         status: { type: string }
         lastActivity: { type: string }
       required: [id, name, email, role, group, status, lastActivity]
+    UserGroupUpdate:
+      type: object
+      properties:
+        group: { type: string, minLength: 1 }
+      required: [group]
     UserImportInput:
       type: object
       properties:

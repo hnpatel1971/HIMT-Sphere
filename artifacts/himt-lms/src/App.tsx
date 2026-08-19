@@ -40,7 +40,7 @@ import {
   useAddCourseOutcome, useCreateAssignment, useCreateCourse, useGetAnalyticsOverview,
   useGetCourse, useGetCurriculumCourseOutline, useGetDashboard, useImportUsers,
   useListAnnouncements, useListAssignments, useListCertificates, useListCourses,
-  useListProgrammeCourses, useListProgrammes, useListSessions, useListUsers
+  useListProgrammeCourses, useListProgrammes, useListSessions, useListUsers, useUpdateUserGroup
 } from '@workspace/api-client-react';
 import type {
   Activity as ActivityType, AnalyticsOverview, Assignment, Certificate, Course, CourseDetail,
@@ -345,13 +345,17 @@ function AnalyticsPage() { const query = useGetAnalyticsOverview({ query: { quer
 function UsersPage() {
   const query        = useListUsers({ query: { queryKey: getListUsersQueryKey() } });
   const importUsers  = useImportUsers();
+  const updateGroup  = useUpdateUserGroup();
   const { toast }    = useToast();
+  const { data: groupData, loading: groupsLoading, error: groupsError } = useApi<GroupRow[]>('/curriculum/groups');
 
   // ── Local state ────────────────────────────────────────────────────────────
   const [search,       setSearch]       = useState('');
   const [openImport,   setOpenImport]   = useState(false);
   const [notice,       setNotice]       = useState('');
   const [roleFilter,   setRoleFilter]   = useState('');
+  const [editingUser,  setEditingUser]  = useState<User | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState('');
 
   // Admin auth (same flow as CurriculumCoursesPage)
   const [isAdmin,      setIsAdmin]      = useState<boolean | null>(null);
@@ -378,6 +382,38 @@ function UsersPage() {
     if (roleFilter && u.role.toLowerCase() !== roleFilter.toLowerCase()) return false;
     return true;
   });
+  const groups = [...(groupData ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+
+  useEffect(() => {
+    if (!editingUser || selectedGroup || !groupData?.length) return;
+    const currentGroup = groupData.find((group) => group.name === editingUser.group)?.name;
+    setSelectedGroup(currentGroup || [...groupData].sort((a, b) => a.name.localeCompare(b.name))[0]?.name || '');
+  }, [editingUser, groupData, selectedGroup]);
+
+  function openGroupEditor(user: User) {
+    setEditingUser(user);
+    setSelectedGroup(groups.find((group) => group.name === user.group)?.name || groups[0]?.name || '');
+  }
+
+  function saveGroupChange(e: FormEvent) {
+    e.preventDefault();
+    if (!isAdmin || !editingUser || !selectedGroup) return;
+    updateGroup.mutate(
+      { userId: editingUser.id, data: { group: selectedGroup } },
+      {
+        onSuccess: (updatedUser) => {
+          queryClient.setQueryData<User[]>(getListUsersQueryKey(), (current) =>
+            current?.map((user) => user.id === updatedUser.id ? updatedUser : user) ?? [updatedUser],
+          );
+          setEditingUser(null);
+          toast({ title: 'Group updated', description: `${updatedUser.name} is now in ${updatedUser.group}.` });
+        },
+        onError: (error) => {
+          toast({ title: 'Could not update group', description: error.message, variant: 'destructive' });
+        },
+      },
+    );
+  }
 
   // ── Import (CSV stub) ──────────────────────────────────────────────────────
   const submitImport = () => {
@@ -540,11 +576,23 @@ function UsersPage() {
                       </div>
                     </td>
                     <td className="px-5 py-4"><Pill>{user.role}</Pill></td>
-                    <td className="px-5 py-4 text-sm text-muted-foreground">{user.group || '—'}</td>
+                    <td className="px-5 py-4">
+                      {isAdmin ? (
+                        <button
+                          type="button"
+                          data-testid={`button-edit-user-group-${user.id}`}
+                          onClick={() => openGroupEditor(user)}
+                          className="rounded-md px-1.5 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+                          aria-label={`Change group for ${user.name}`}
+                        >
+                          {user.group || '—'}
+                        </button>
+                      ) : <span className="px-1.5 text-sm text-muted-foreground">{user.group || '—'}</span>}
+                    </td>
                     <td className="px-5 py-4"><Pill>{user.status}</Pill></td>
                     <td className="px-5 py-4 text-[11px] font-semibold text-muted-foreground">{niceDate(user.lastActivity)}</td>
                     <td className="px-5 py-4 text-right">
-                      <button data-testid={`button-user-more-${user.id}`} aria-label={`More actions for ${user.name}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button>
+                      {isAdmin && <button data-testid={`button-user-more-${user.id}`} aria-label={`Change group for ${user.name}`} onClick={() => openGroupEditor(user)} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button>}
                     </td>
                   </tr>
                 ))}
@@ -568,6 +616,37 @@ function UsersPage() {
           <div className="mt-4 flex justify-end">
             <Button testId="button-cancel-user-import" variant="quiet" onClick={() => setOpenImport(false)}>Cancel</Button>
           </div>
+        </Modal>
+      )}
+
+      {editingUser && isAdmin && (
+        <Modal title={`Change group for ${editingUser.name}`} onClose={() => setEditingUser(null)}>
+          <form onSubmit={saveGroupChange} className="space-y-5">
+            <p className="text-sm text-muted-foreground">Choose the existing group this person should belong to.</p>
+            <Field label="Group">
+              {groupsLoading ? (
+                <div className="form-input flex items-center text-sm text-muted-foreground">Loading groups…</div>
+              ) : groupsError ? (
+                <p className="rounded-lg bg-destructive/10 p-3 text-sm font-semibold text-destructive">Groups could not be loaded. Close this dialog and try again.</p>
+              ) : (
+                <select
+                  required
+                  data-testid="select-user-group"
+                  value={selectedGroup}
+                  onChange={(e) => setSelectedGroup(e.target.value)}
+                  className="form-input"
+                  disabled={groups.length === 0}
+                >
+                  {groups.length === 0 ? <option value="">No groups available</option> : groups.map((group) => <option key={group.id} value={group.name}>{group.name}</option>)}
+                </select>
+              )}
+            </Field>
+            {groups.length === 0 && !groupsLoading && !groupsError && <p className="text-sm text-muted-foreground">Create a group in Curriculum before assigning a learner.</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-cancel-user-group" variant="quiet" type="button" onClick={() => setEditingUser(null)}>Cancel</Button>
+              <Button testId="button-save-user-group" type="submit" disabled={groupsLoading || Boolean(groupsError) || groups.length === 0 || !selectedGroup || updateGroup.isPending}>{updateGroup.isPending ? 'Saving…' : 'Save group'}</Button>
+            </div>
+          </form>
         </Modal>
       )}
 

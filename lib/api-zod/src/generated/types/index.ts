@@ -34,4 +34,5 @@ export * from './programmeCourse';
 export * from './session';
 export * from './topic';
 export * from './user';
+export * from './userGroupUpdate';
 export * from './userImportInput';

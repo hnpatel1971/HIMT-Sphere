@@ -41,6 +41,7 @@ import type {
   ProgrammeCourse,
   Session,
   User,
+  UserGroupUpdate,
   UserImportInput
 } from './api.schemas';
 
@@ -997,6 +998,78 @@ export function useListUsers<TData = Awaited<ReturnType<typeof listUsers>>, TErr
 
 
 
+
+export const getUpdateUserGroupUrl = (userId: string,) => {
+
+
+
+
+  return `/api/users/${userId}`
+}
+
+/**
+ * @summary Update a user's group
+ */
+export const updateUserGroup = async (userId: string,
+    userGroupUpdate: UserGroupUpdate, options?: Parameters<typeof customFetch>[1]): Promise<User> => {
+
+  return customFetch<User>(getUpdateUserGroupUrl(userId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(userGroupUpdate)
+  }
+);}
+
+
+
+
+
+export const getUpdateUserGroupMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateUserGroup>>, TError,{userId: string;data: BodyType<UserGroupUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateUserGroup>>, TError,{userId: string;data: BodyType<UserGroupUpdate>}, TContext> => {
+
+const mutationKey = ['updateUserGroup'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateUserGroup>>, {userId: string;data: BodyType<UserGroupUpdate>}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  updateUserGroup(userId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateUserGroupMutationResult = NonNullable<Awaited<ReturnType<typeof updateUserGroup>>>
+    export type UpdateUserGroupMutationBody = BodyType<UserGroupUpdate>
+    export type UpdateUserGroupMutationError = ErrorType<Error>
+
+    /**
+ * @summary Update a user's group
+ */
+export const useUpdateUserGroup = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateUserGroup>>, TError,{userId: string;data: BodyType<UserGroupUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateUserGroup>>,
+        TError,
+        {userId: string;data: BodyType<UserGroupUpdate>},
+        TContext
+      > => {
+      return useMutation(getUpdateUserGroupMutationOptions(options));
+    }
 
 export const getListProgrammesUrl = () => {
 
