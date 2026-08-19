@@ -16,3 +16,9 @@ description: Safety and reliability rules for importing all TriByte course struc
 **Why:** Cancellation stops after the current course; treating “retry” as failures only would permanently leave the unstarted portion of the catalog out of the migration.
 
 **How to apply:** Label the action as a resume when pending courses remain, and report the combined unfinished count to the administrator.
+
+**Rule:** An authenticated, course-specific TriByte “Show All Topics” page with no topic cards represents an empty structure, not an import failure.
+
+**Why:** Some legacy courses exist in TriByte without any topics. Their pages load normally but contain no topic-node links to migrate.
+
+**How to apply:** Complete the course with zero imported topics while retaining an explanatory result note. Only flag an error when the page is unauthenticated or otherwise does not match the expected course page.

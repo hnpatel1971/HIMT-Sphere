@@ -1099,7 +1099,24 @@ async function importTriByteCourseTopics(
     const endPos = findLiBlockEnd(html, item.innerStart);
     item.innerHtml = html.slice(item.innerStart, endPos);
   }
-  if (nidItems.length === 0) throw new Error("TriByte returned no topic cards for this course");
+  if (nidItems.length === 0) {
+    const pageTitle = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+      ?.replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() ?? "";
+    // These pages are authenticated and course-specific, but the selected
+    // TriByte course has no topic cards to migrate. Completing them avoids
+    // treating deliberately empty structures as importer failures.
+    if (/^Show All Topics of\b/i.test(pageTitle)) {
+      return {
+        outcome: "imported",
+        imported: 0,
+        subtopicsImported: 0,
+        reason: "No topics found in TriByte",
+      };
+    }
+    throw new Error("TriByte returned no topic cards for this course");
+  }
 
   const minDepth = Math.min(...nidItems.map(i => i.depth));
   const topicItems = nidItems.filter(i => i.depth === minDepth);
