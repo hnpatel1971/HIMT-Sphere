@@ -2262,6 +2262,7 @@ async function ensureTriByteSubtopic(
   course: typeof curriculumCoursesTable.$inferSelect,
   topic: typeof courseTopicsTable.$inferSelect,
   discovered: DiscoveredNode,
+  order: number,
 ): Promise<typeof courseSubtopicsTable.$inferSelect> {
   const id = `cs-${topic.tid}-${discovered.nid}`;
   const [existing] = await db.select().from(courseSubtopicsTable)
@@ -2273,13 +2274,43 @@ async function ensureTriByteSubtopic(
     courseId: course.id,
     nid: discovered.nid,
     name: discovered.title.slice(0, 500),
-    order: 0,
+    order,
   }).onConflictDoNothing().returning();
   if (created) return created;
   const [afterConflict] = await db.select().from(courseSubtopicsTable)
     .where(eq(courseSubtopicsTable.id, id));
   if (!afterConflict) throw new Error(`Could not persist TriByte sub-topic ${discovered.nid}`);
   return afterConflict;
+}
+
+/**
+ * Older resource scans created every newly discovered TriByte sub-topic with
+ * order zero. Repair only that unmistakable default state; a non-zero ordering
+ * may represent an administrator's intentional LMS arrangement.
+ */
+async function repairDefaultTriByteSubtopicOrder(
+  course: typeof curriculumCoursesTable.$inferSelect,
+  topic: typeof courseTopicsTable.$inferSelect,
+  discoveredSubtopics: DiscoveredNode[],
+): Promise<void> {
+  if (discoveredSubtopics.length < 2) return;
+  const expectedNids = new Set(discoveredSubtopics.map(subtopic => subtopic.nid));
+  const existing = (await db.select().from(courseSubtopicsTable)
+    .where(eq(courseSubtopicsTable.topicId, topic.id)))
+    .filter(subtopic => expectedNids.has(subtopic.nid ?? ""));
+
+  if (
+    existing.length !== discoveredSubtopics.length
+    || !existing.every(subtopic => (subtopic.order ?? 0) === 0)
+  ) return;
+
+  for (const [order, discovered] of discoveredSubtopics.entries()) {
+    const subtopic = existing.find(row => row.nid === discovered.nid);
+    if (!subtopic) continue;
+    await db.update(courseSubtopicsTable)
+      .set({ order })
+      .where(eq(courseSubtopicsTable.id, subtopic.id));
+  }
 }
 
 async function collectCourseResources(
@@ -2333,8 +2364,8 @@ async function collectCourseResources(
       subtopicsHtml,
       /\/node\/(\d+)\/edit\/contents(?:[/?]|$)/i,
     );
-    for (const discovered of discoveredSubtopics) {
-      const subtopic = await ensureTriByteSubtopic(course, topic, discovered);
+    for (const [subtopicOrder, discovered] of discoveredSubtopics.entries()) {
+      const subtopic = await ensureTriByteSubtopic(course, topic, discovered, subtopicOrder);
       const subtopicNid = subtopic.nid ?? discovered.nid;
       const subtopicParent = {
         topicId: topic.id,
@@ -2355,6 +2386,7 @@ async function collectCourseResources(
         );
       }
     }
+    await repairDefaultTriByteSubtopicOrder(course, topic, discoveredSubtopics);
   }
   for (const subtopic of subtopics) {
     if (!subtopic.nid) continue;
