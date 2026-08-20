@@ -1186,14 +1186,6 @@ async function importTriByteCourseTopics(
 
   const existingTopics = await db.select().from(courseTopicsTable)
     .where(eq(courseTopicsTable.courseId, courseId));
-  if (existingTopics.length > 0 && !replaceExisting) {
-    return {
-      outcome: "skipped",
-      imported: 0,
-      subtopicsImported: 0,
-      reason: "Existing course structure kept safe",
-    };
-  }
 
   const url = `${TB_BASE_URL}/reviewer/topics?cat=${tid}&catspec=true`;
   const htmlRes = await fetch(url, {
@@ -1261,7 +1253,6 @@ async function importTriByteCourseTopics(
 
   const minDepth = Math.min(...nidItems.map(i => i.depth));
   const topicItems = nidItems.filter(i => i.depth === minDepth);
-  const subItems = nidItems.filter(i => i.depth > minDepth);
   const topicTitles = new Map<string, string>();
   for (const topic of topicItems) {
     const detailRes = await fetch(`${TB_BASE_URL}/node/${topic.nid}/edit/topic/tab`, {
@@ -1290,28 +1281,51 @@ async function importTriByteCourseTopics(
     thumbUrl: extractTopicThumb(topic.innerHtml),
     faculty: "",
   }));
-  if (topicRows.length) await db.insert(courseTopicsTable).values(topicRows).onConflictDoNothing();
+  const insertedTopics = topicRows.length
+    ? await db.insert(courseTopicsTable).values(topicRows).onConflictDoNothing().returning({ id: courseTopicsTable.id })
+    : [];
 
   let subtopicsInserted = 0;
-  const subOrderByTopic: Record<string, number> = {};
-  for (const sub of subItems) {
-    const parentTopic = [...topicItems].reverse().find(topic => topic.pos < sub.pos);
-    const topicRow = parentTopic ? topicRows.find(row => row.nid === parentTopic.nid) : undefined;
-    if (!topicRow) continue;
-    const subOrder = subOrderByTopic[topicRow.id] ?? 0;
-    subOrderByTopic[topicRow.id] = subOrder + 1;
-    await db.insert(courseSubtopicsTable).values({
-      id: `cs-${tid}-${sub.nid}`,
-      topicId: topicRow.id,
-      courseId,
-      nid: sub.nid,
-      name: extractTopicName(sub.innerHtml, sub.nid),
-      order: subOrder,
-    }).onConflictDoNothing();
-    subtopicsInserted++;
+  for (const topicRow of topicRows) {
+    // The category page can show only top-level topic links. The topic's own
+    // ordered sub-topic view is the source of truth for its child structure.
+    const subtopicRes = await fetch(`${TB_BASE_URL}/node/${topicRow.nid}/edit/subtopics`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" },
+    });
+    if (!subtopicRes.ok) {
+      throw new Error(`TriByte sub-topic view responded ${subtopicRes.status}`);
+    }
+    const subtopicHtml = await subtopicRes.text();
+    if (isTBLoginPage(subtopicHtml)) {
+      throw new Error("TriByte rejected the stored login — check the configured credentials");
+    }
+    const discoveredSubtopics = extractTriByteNodes(
+      subtopicHtml,
+      /\/node\/(\d+)\/edit\/contents(?:[/?]|$)/i,
+    );
+    for (const [order, subtopic] of discoveredSubtopics.entries()) {
+      const [created] = await db.insert(courseSubtopicsTable).values({
+        id: `cs-${tid}-${subtopic.nid}`,
+        topicId: topicRow.id,
+        courseId,
+        nid: subtopic.nid,
+        name: subtopic.title.slice(0, 500),
+        order,
+      }).onConflictDoNothing().returning({ id: courseSubtopicsTable.id });
+      if (created) subtopicsInserted++;
+    }
   }
 
-  return { outcome: "imported", imported: topicRows.length, subtopicsImported: subtopicsInserted };
+  if (!replaceExisting && existingTopics.length > 0 && insertedTopics.length === 0 && subtopicsInserted === 0) {
+    return {
+      outcome: "skipped",
+      imported: 0,
+      subtopicsImported: 0,
+      reason: "Existing course structure already matches TriByte",
+    };
+  }
+  return { outcome: "imported", imported: insertedTopics.length, subtopicsImported: subtopicsInserted };
 }
 
 // Import topics (and sub-topics) from TriByte for a curriculum course.
@@ -2183,11 +2197,33 @@ function isApprovedDownloadUrl(url: string): boolean {
   }
 }
 
+async function resolveTriByteDownloadUsername(): Promise<string | null> {
+  // TriByte's protected clipping endpoint may require uname even when the
+  // server has a valid authenticated session. Keep that value out of persisted
+  // source URLs, and add it only to the in-memory download request.
+  try {
+    const [storedUsername] = await db.select().from(appSettingsTable)
+      .where(eq(appSettingsTable.key, "tribyte_username"));
+    if (storedUsername?.value.trim()) return storedUsername.value.trim();
+  } catch {
+    // Fall back to the environment credential below.
+  }
+  return process.env.TRIBYTE_USERNAME?.trim() || null;
+}
+
 async function fetchApprovedResource(
   url: string,
   session: { cookie: string; strategy: string },
 ): Promise<Response> {
   let target = new URL(url);
+  if (
+    isTriByteUrl(target.href)
+    && target.pathname === "/reviewer/download/clipping"
+    && !target.searchParams.has("uname")
+  ) {
+    const username = await resolveTriByteDownloadUsername();
+    if (username) target.searchParams.set("uname", username);
+  }
   for (let redirects = 0; redirects < 4; redirects++) {
     if (!isApprovedDownloadUrl(target.href)) {
       throw new Error("External source requires review before it can be migrated");
