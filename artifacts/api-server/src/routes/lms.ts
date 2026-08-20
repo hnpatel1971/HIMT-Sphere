@@ -1171,6 +1171,14 @@ type StructureImportResult = {
   reason?: string;
 };
 
+function triByteTopicId(courseId: string, nid: string): string {
+  return `ct-${courseId}-${nid}`;
+}
+
+function triByteSubtopicId(courseId: string, nid: string): string {
+  return `cs-${courseId}-${nid}`;
+}
+
 /**
  * Import one course's TriByte structure. Bulk imports default to preserving any
  * existing LMS structure; callers must explicitly opt in to replacement.
@@ -1184,7 +1192,7 @@ async function importTriByteCourseTopics(
   const tid = course.tribyteTid ?? "";
   if (!tid) throw new Error("Course has no TriByte TID — cannot import");
 
-  const existingTopics = await db.select().from(courseTopicsTable)
+  let existingTopics = await db.select().from(courseTopicsTable)
     .where(eq(courseTopicsTable.courseId, courseId));
 
   const url = `${TB_BASE_URL}/reviewer/topics?cat=${tid}&catspec=true`;
@@ -1210,18 +1218,21 @@ async function importTriByteCourseTopics(
     }
   }
 
-  // Current TriByte carousels expose stable ordered "Edit sub-topics" links
-  // instead of data-nid attributes.
-  if (nidItems.length === 0) {
-    const seenNids = new Set<string>();
-    const subtopicLinkRe = /href=["'][^"']*\/node\/(\d+)\/edit\/subtopics[^"']*["']/gi;
-    while ((m = subtopicLinkRe.exec(html)) !== null) {
-      const nid = m[1];
-      if (!seenNids.has(nid)) {
-        seenNids.add(nid);
-        nidItems.push({ pos: m.index, nid, innerStart: m.index, depth: 0, innerHtml: "" });
-      }
+  // TriByte's ordered "Edit sub-topics" links are the authoritative list of
+  // top-level topics. Some pages contain unrelated data-nid markup, so prefer
+  // these explicit navigation links whenever they are present.
+  const topicLinkItems: LiNidItem[] = [];
+  const seenTopicNids = new Set<string>();
+  const subtopicLinkRe = /href=["'][^"']*\/node\/(\d+)\/edit\/subtopics[^"']*["']/gi;
+  while ((m = subtopicLinkRe.exec(html)) !== null) {
+    const nid = m[1];
+    if (!seenTopicNids.has(nid)) {
+      seenTopicNids.add(nid);
+      topicLinkItems.push({ pos: m.index, nid, innerStart: m.index, depth: 0, innerHtml: "" });
     }
+  }
+  if (topicLinkItems.length > 0) {
+    nidItems.splice(0, nidItems.length, ...topicLinkItems);
   }
 
   for (const item of nidItems) {
@@ -1269,10 +1280,11 @@ async function importTriByteCourseTopics(
       await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, topic.id));
     }
     await db.delete(courseTopicsTable).where(eq(courseTopicsTable.courseId, courseId));
+    existingTopics = [];
   }
 
   const topicRows = topicItems.map((topic, order) => ({
-    id: `ct-${tid}-${topic.nid}`,
+    id: triByteTopicId(courseId, topic.nid),
     courseId,
     nid: topic.nid,
     tid,
@@ -1281,12 +1293,21 @@ async function importTriByteCourseTopics(
     thumbUrl: extractTopicThumb(topic.innerHtml),
     faculty: "",
   }));
-  const insertedTopics = topicRows.length
-    ? await db.insert(courseTopicsTable).values(topicRows).onConflictDoNothing().returning({ id: courseTopicsTable.id })
+  const existingTopicNids = new Set(existingTopics.map(topic => topic.nid));
+  const missingTopicRows = topicRows.filter(topic => !existingTopicNids.has(topic.nid));
+  const insertedTopics = missingTopicRows.length
+    ? await db.insert(courseTopicsTable).values(missingTopicRows).onConflictDoNothing().returning({ id: courseTopicsTable.id })
     : [];
+  const persistedTopics = await db.select().from(courseTopicsTable)
+    .where(eq(courseTopicsTable.courseId, courseId));
+  const persistedTopicByNid = new Map(persistedTopics.map(topic => [topic.nid, topic]));
 
   let subtopicsInserted = 0;
   for (const topicRow of topicRows) {
+    const persistedTopic = persistedTopicByNid.get(topicRow.nid);
+    if (!persistedTopic) {
+      throw new Error(`Could not persist TriByte topic ${topicRow.nid}`);
+    }
     // The category page can show only top-level topic links. The topic's own
     // ordered sub-topic view is the source of truth for its child structure.
     const subtopicRes = await fetch(`${TB_BASE_URL}/node/${topicRow.nid}/edit/subtopics`, {
@@ -1304,13 +1325,25 @@ async function importTriByteCourseTopics(
       subtopicHtml,
       /\/node\/(\d+)\/edit\/contents(?:[/?]|$)/i,
     );
+    const existingSubtopics = await db.select().from(courseSubtopicsTable)
+      .where(eq(courseSubtopicsTable.topicId, persistedTopic.id));
+    const existingSubtopicNids = new Set(existingSubtopics.map(subtopic => subtopic.nid));
     for (const [order, subtopic] of discoveredSubtopics.entries()) {
+      if (existingSubtopicNids.has(subtopic.nid)) continue;
+      const subtopicDetailRes = await fetch(`${TB_BASE_URL}/node/${subtopic.nid}/edit/subtopic/tab`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" },
+      });
+      if (!subtopicDetailRes.ok) {
+        throw new Error(`TriByte sub-topic details responded ${subtopicDetailRes.status}`);
+      }
+      const subtopicName = extractDrupalNodeTitle(await subtopicDetailRes.text()) || subtopic.title;
       const [created] = await db.insert(courseSubtopicsTable).values({
-        id: `cs-${tid}-${subtopic.nid}`,
-        topicId: topicRow.id,
+        id: triByteSubtopicId(courseId, subtopic.nid),
+        topicId: persistedTopic.id,
         courseId,
         nid: subtopic.nid,
-        name: subtopic.title.slice(0, 500),
+        name: subtopicName.slice(0, 500),
         order,
       }).onConflictDoNothing().returning({ id: courseSubtopicsTable.id });
       if (created) subtopicsInserted++;
@@ -1345,139 +1378,17 @@ router.post("/curriculum/courses/:id/topics/import", requireAdmin, async (req, r
       return;
     }
 
-    const url = `https://admin.learn.himtelearning.com/reviewer/topics?cat=${course.tribyteTid}&catspec=true`;
-    const htmlRes = await fetch(url, { headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" } });
-    if (!htmlRes.ok) { res.status(502).json({ error: `TriByte responded ${htmlRes.status}` }); return; }
-    const html = await htmlRes.text();
-    if (isTBLoginPage(html)) {
-      res.status(401).json({ error: "TriByte rejected the stored login — check the configured credentials and try again" });
-      return;
-    }
-
-    // ── Step 1: Collect all <li data-nid="NID"> positions and their inner HTML ──
-    interface LiNidItem {
-      pos: number; nid: string; innerStart: number;
-      depth: number; innerHtml: string;
-    }
-    const nidItems: LiNidItem[] = [];
-    const liTagRe = /<li\b([^>]*)>/gi;
-    let m: RegExpExecArray | null;
-    while ((m = liTagRe.exec(html)) !== null) {
-      const nidMatch = m[1].match(/\bdata-nid\s*=\s*["'](\d+)["']/i);
-      if (nidMatch) {
-        const innerStart = m.index + m[0].length;
-        nidItems.push({ pos: m.index, nid: nidMatch[1], innerStart, depth: 0, innerHtml: '' });
-      }
-    }
-
-    // TriByte's current topic carousel does not use data attributes. Its ordered
-    // "Edit sub-topics" links are the stable source of each topic node ID.
-    if (nidItems.length === 0) {
-      const seenNids = new Set<string>();
-      const subtopicLinkRe = /href=["'][^"']*\/node\/(\d+)\/edit\/subtopics[^"']*["']/gi;
-      while ((m = subtopicLinkRe.exec(html)) !== null) {
-        const nid = m[1];
-        if (!seenNids.has(nid)) {
-          seenNids.add(nid);
-          nidItems.push({ pos: m.index, nid, innerStart: m.index, depth: 0, innerHtml: "" });
-        }
-      }
-    }
-
-    // ── Step 2: Compute nesting depth by counting opens/closes before each item ──
-    for (const item of nidItems) {
-      const before = html.slice(0, item.pos);
-      const opens  = (before.match(/<li[\s>]/g) || []).length;
-      const closes = (before.match(/<\/li>/g)   || []).length;
-      item.depth = opens - closes;
-    }
-
-    // ── Step 3: Capture each item's inner HTML (handles nested <li> correctly) ──
-    for (const item of nidItems) {
-      const endPos = findLiBlockEnd(html, item.innerStart);
-      item.innerHtml = html.slice(item.innerStart, endPos);
-    }
-
-    if (nidItems.length === 0) {
-      const pageTitle = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-        ?.replace(/<[^>]+>/g, "").trim();
-      console.warn("[tribyte] Topics page contained no topic nodes", {
-        courseId: course.id,
-        tid: course.tribyteTid,
-        strategy: session.strategy,
-        pageTitle,
-      });
-      res.status(422).json({ error: "TriByte returned no topic cards for this course", pageTitle });
-      return;
-    }
-
-    // ── Step 4: Split into topics (minimum depth) and subtopics (deeper) ──
-    const minDepth   = Math.min(...nidItems.map(i => i.depth));
-    const topicItems = nidItems.filter(i => i.depth === minDepth);
-    const subItems   = nidItems.filter(i => i.depth >  minDepth);
-    const topicTitles = new Map<string, string>();
-    for (const topic of topicItems) {
-      const detailRes = await fetch(`${TB_BASE_URL}/node/${topic.nid}/edit/topic/tab`, {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        headers: { Cookie: session.cookie, "User-Agent": "Mozilla/5.0" },
-      });
-      if (!detailRes.ok) continue;
-      const title = extractDrupalNodeTitle(await detailRes.text());
-      if (title) topicTitles.set(topic.nid, title);
-    }
-
-    // ── Step 5: Clear existing data ──
-    const existingTopics = await db.select().from(courseTopicsTable)
+    // The per-course action must use the same safe, source-driven importer as
+    // background reconciliation. It preserves existing structure unless the
+    // caller explicitly requests replacement.
+    const result = await importTriByteCourseTopics(course, session, req.body?.replaceExisting === true);
+    const topics = await db.select().from(courseTopicsTable)
       .where(eq(courseTopicsTable.courseId, courseId));
-    for (const t of existingTopics) {
-      await db.delete(courseSubtopicsTable).where(eq(courseSubtopicsTable.topicId, t.id));
-    }
-    await db.delete(courseTopicsTable).where(eq(courseTopicsTable.courseId, courseId));
-
-    // ── Step 6: Insert topics ──
-    const topicRows = topicItems.map((t, i) => ({
-      id:       `ct-${course.tribyteTid}-${t.nid}`,
-      courseId,
-      nid:      t.nid,
-      tid:      course.tribyteTid ?? "",
-       name:     topicTitles.get(t.nid) ?? extractTopicName(t.innerHtml, t.nid),
-      order:    i,
-      thumbUrl: extractTopicThumb(t.innerHtml),
-      faculty:  "",
-    }));
-    if (topicRows.length) await db.insert(courseTopicsTable).values(topicRows);
-
-    // ── Step 7: Insert subtopics — each under the nearest preceding topic ──
-    let subtopicsInserted = 0;
-    // track per-topic subtopic order
-    const subOrderByTopic: Record<string, number> = {};
-
-    for (const sub of subItems) {
-      // nearest preceding topic in document order
-      const parentTopic = [...topicItems].reverse().find(t => t.pos < sub.pos);
-      if (!parentTopic) continue;
-      const topicRow = topicRows.find(r => r.nid === parentTopic.nid);
-      if (!topicRow) continue;
-
-      const topicId = topicRow.id;
-      const subOrder = subOrderByTopic[topicId] ?? 0;
-      subOrderByTopic[topicId] = subOrder + 1;
-
-      await db.insert(courseSubtopicsTable).values({
-        id:       `cs-${course.tribyteTid}-${sub.nid}`,
-        topicId,
-        courseId,
-        nid:      sub.nid,
-        name:     extractTopicName(sub.innerHtml, sub.nid),
-        order:    subOrder,
-      }).onConflictDoNothing();
-      subtopicsInserted++;
-    }
-
     res.status(201).json({
-      imported: topicRows.length,
-      subtopicsImported: subtopicsInserted,
-      topics: topicRows,
+      imported: result.imported,
+      subtopicsImported: result.subtopicsImported,
+      message: result.reason,
+      topics,
     });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -2331,10 +2242,13 @@ async function ensureTriByteSubtopic(
   discovered: DiscoveredNode,
   order: number,
 ): Promise<typeof courseSubtopicsTable.$inferSelect> {
-  const id = `cs-${topic.tid}-${discovered.nid}`;
   const [existing] = await db.select().from(courseSubtopicsTable)
-    .where(eq(courseSubtopicsTable.id, id));
+    .where(and(
+      eq(courseSubtopicsTable.courseId, course.id),
+      eq(courseSubtopicsTable.nid, discovered.nid),
+    ));
   if (existing) return existing;
+  const id = triByteSubtopicId(course.id, discovered.nid);
   const [created] = await db.insert(courseSubtopicsTable).values({
     id,
     topicId: topic.id,
@@ -2345,7 +2259,10 @@ async function ensureTriByteSubtopic(
   }).onConflictDoNothing().returning();
   if (created) return created;
   const [afterConflict] = await db.select().from(courseSubtopicsTable)
-    .where(eq(courseSubtopicsTable.id, id));
+    .where(and(
+      eq(courseSubtopicsTable.courseId, course.id),
+      eq(courseSubtopicsTable.nid, discovered.nid),
+    ));
   if (!afterConflict) throw new Error(`Could not persist TriByte sub-topic ${discovered.nid}`);
   return afterConflict;
 }
