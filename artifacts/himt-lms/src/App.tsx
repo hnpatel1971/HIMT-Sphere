@@ -32,7 +32,7 @@ import {
   Activity, Archive, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, Eye, FileSearch, FileUp, Filter, GraduationCap,
   GripVertical, Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
-  Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
+  MinusCircle, Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
 } from 'lucide-react';
 import {
@@ -1688,6 +1688,393 @@ type CourseTopic = {
   subtopics: Array<{ id: string; topicId: string; courseId: string; nid: string; name: string; order: number }>;
 };
 
+type TopicWorkspaceTab = 'Attributes' | 'Book' | 'Copy Attributes' | 'Sub Topics' | 'Tests' | 'Tasks' | 'Faculty' | 'Glossary';
+
+const TOPIC_WORKSPACE_TABS: TopicWorkspaceTab[] = [
+  'Attributes', 'Book', 'Copy Attributes', 'Sub Topics', 'Tests', 'Tasks', 'Faculty', 'Glossary',
+];
+
+function displayTopicName(name: string, position: number) {
+  const trimmedName = name.trim();
+  return /^\d{1,3}[.)]\s+/.test(trimmedName)
+    ? trimmedName
+    : `${String(position).padStart(2, '0')}. ${trimmedName}`;
+}
+
+function TopicWorkspacePage() {
+  const { courseId = '', topicId = '' } = useParams<{ courseId: string; topicId: string }>();
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const [topic, setTopic] = useState<CourseTopic | null>(null);
+  const [courseName, setCourseName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState<TopicWorkspaceTab>('Attributes');
+  const [selected, setSelected] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editThumb, setEditThumb] = useState('');
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginUser, setLoginUser] = useState('');
+  const [loginPass, setLoginPass] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ isAdmin: boolean }>('/auth/status')
+      .then(result => setIsAdmin(result.isAdmin))
+      .catch(() => setIsAdmin(false));
+  }, []);
+
+  async function loadTopic() {
+    setLoading(true);
+    setError('');
+    try {
+      const [courseTopics, courses] = await Promise.all([
+        apiFetch<CourseTopic[]>(`/curriculum/courses/${courseId}/topics`),
+        apiFetch<Array<{ id: string; name: string }>>('/curriculum/list'),
+      ]);
+      setTopic(courseTopics.find(item => item.id === topicId) ?? null);
+      setCourseName(courses.find(course => course.id === courseId)?.name ?? '');
+      if (!courseTopics.some(item => item.id === topicId)) setError('Topic not found');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (courseId && topicId) loadTopic();
+  }, [courseId, topicId]);
+
+  function requireAdminThen(action: () => void) {
+    if (isAdmin) {
+      action();
+      return;
+    }
+    setPendingAction(() => action);
+    setShowLogin(true);
+  }
+
+  async function handleAdminLogin(event: FormEvent) {
+    event.preventDefault();
+    setLoginBusy(true);
+    setLoginError('');
+    try {
+      await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
+      setIsAdmin(true);
+      setShowLogin(false);
+      setLoginUser('');
+      setLoginPass('');
+      if (pendingAction) {
+        const action = pendingAction;
+        setPendingAction(null);
+        action();
+      }
+    } catch (err) {
+      setLoginError(String(err).replace(/^Error:\s*/, ''));
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  function handleAdminError(err: unknown) {
+    const message = String(err);
+    if (message.includes('401') || message.includes('Unauthorized')) {
+      setIsAdmin(false);
+      setShowLogin(true);
+    } else {
+      toast({ title: 'Error', description: message, variant: 'destructive' });
+    }
+  }
+
+  async function handleAddSubtopic(event: FormEvent) {
+    event.preventDefault();
+    if (!topic || !addName.trim()) return;
+    try {
+      await apiFetch(`/curriculum/topics/${topic.id}/subtopics`, 'POST', { name: addName.trim() });
+      setAddOpen(false);
+      setAddName('');
+      await loadTopic();
+      toast({ title: 'Sub-topic added' });
+    } catch (err) {
+      handleAdminError(err);
+    }
+  }
+
+  async function handleEditTopic(event: FormEvent) {
+    event.preventDefault();
+    if (!topic || !editName.trim()) return;
+    try {
+      await apiFetch(`/curriculum/topics/${topic.id}`, 'PATCH', { name: editName.trim(), thumbUrl: editThumb.trim() });
+      setEditOpen(false);
+      await loadTopic();
+      toast({ title: 'Topic updated' });
+    } catch (err) {
+      handleAdminError(err);
+    }
+  }
+
+  function openEdit() {
+    if (!topic) return;
+    requireAdminThen(() => {
+      setEditName(topic.name);
+      setEditThumb(topic.thumbUrl);
+      setEditOpen(true);
+    });
+  }
+
+  function deleteTopic() {
+    if (!topic || !selected) return;
+    requireAdminThen(async () => {
+      if (!confirm(`Delete topic "${topic.name}"? This cannot be undone.`)) return;
+      try {
+        await apiFetch(`/curriculum/topics/${topic.id}`, 'DELETE');
+        toast({ title: 'Topic deleted' });
+        navigate(`/curriculum/courses/${courseId}/structure`);
+      } catch (err) {
+        handleAdminError(err);
+      }
+    });
+  }
+
+  const toolbarButton = (
+    label: string,
+    icon: ReactNode,
+    onClick?: () => void,
+    disabled = false,
+  ) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cx(
+        'inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-xs transition-colors',
+        disabled ? 'cursor-not-allowed text-gray-300' : 'hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900',
+      )}
+    >
+      {icon}{label}
+    </button>
+  );
+
+  const renderTabContent = () => {
+    if (!topic) return null;
+    if (activeTab === 'Attributes') {
+      return (
+        <div className="relative rounded-xl border border-gray-100 bg-white p-4 shadow-xs sm:p-5">
+          <label className="absolute right-4 top-4 flex h-4 w-4 cursor-pointer items-center justify-center">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={event => setSelected(event.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary/30"
+              aria-label={`Select ${topic.name}`}
+            />
+          </label>
+          <div className="flex flex-col gap-5 pr-2 sm:flex-row sm:items-center">
+            <div className="flex h-28 w-full shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#f8f4ef] sm:h-28 sm:w-36">
+              {topic.thumbUrl ? (
+                <img src={topic.thumbUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-primary/70">
+                  <BookOpen size={42} strokeWidth={1.15} />
+                  <span className="text-[9px] font-semibold uppercase tracking-wider">Topic</span>
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="max-w-md text-lg font-medium leading-snug text-gray-700">
+                {displayTopicName(topic.name, (topic.order ?? 0) + 1)}
+              </p>
+              {topic.faculty && <p className="mt-2 text-xs text-gray-500">Faculty: {topic.faculty}</p>}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2 sm:pr-7">
+              {toolbarButton('Edit', <Pencil size={13} />, openEdit)}
+              {toolbarButton('Upload TOC', <Upload size={13} />, () => toast({ title: 'TOC upload', description: 'The selected topic is ready for a TOC upload.' }))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (activeTab === 'Sub Topics') {
+      return (
+        <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-xs">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-gray-800">Sub-topics</p>
+              <p className="mt-1 text-xs text-gray-500">Organise the learning sections inside this topic.</p>
+            </div>
+            {toolbarButton('Add New', <Plus size={13} />, () => requireAdminThen(() => setAddOpen(true)))}
+          </div>
+          {topic.subtopics.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-gray-200 px-4 py-10 text-center text-sm text-gray-400">
+              No sub-topics have been added yet.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {topic.subtopics.map((subtopic, index) => (
+                <div key={subtopic.id} className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+                  <span className="w-6 text-center text-xs font-semibold text-gray-400">{index + 1}</span>
+                  <span className="flex-1 text-sm font-medium text-gray-700">{subtopic.name}</span>
+                  <span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                    Sub-topic
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const tabDescriptions: Record<Exclude<TopicWorkspaceTab, 'Attributes' | 'Sub Topics'>, string> = {
+      Book: 'Book settings and topic reading material will appear here.',
+      'Copy Attributes': 'Copy attributes from another topic when this workflow is enabled.',
+      Tests: 'Topic tests and assessments will appear here.',
+      Tasks: 'Topic tasks and learner activities will appear here.',
+      Faculty: 'Faculty assignment details will appear here.',
+      Glossary: 'Topic glossary terms will appear here.',
+    };
+    return (
+      <div className="rounded-xl border border-dashed border-gray-200 bg-white px-6 py-16 text-center shadow-xs">
+        <Layers size={30} className="mx-auto mb-3 text-gray-300" strokeWidth={1.4} />
+        <p className="text-sm font-semibold text-gray-600">{activeTab}</p>
+        <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-gray-400">{tabDescriptions[activeTab]}</p>
+      </div>
+    );
+  };
+
+  return (
+    <div className="-mx-5 -my-7 min-h-[calc(100vh-72px)] bg-[#eef1fb] lg:-mx-10 lg:-my-9">
+      <div className="space-y-4 p-5 sm:p-8 lg:p-10">
+        <div className="flex items-center justify-between gap-4">
+          <button
+            type="button"
+            onClick={() => navigate(`/curriculum/courses/${courseId}/structure`)}
+            className="inline-flex min-w-0 items-center gap-1.5 text-sm font-semibold text-gray-700 transition-colors hover:text-gray-900"
+          >
+            <ChevronLeft size={18} className="shrink-0" />
+            <span className="truncate">{topic ? displayTopicName(topic.name, (topic.order ?? 0) + 1) : 'Topic'}</span>
+          </button>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            {toolbarButton('Create', <Sparkles size={13} />, () => requireAdminThen(() => setAddOpen(true)))}
+            {toolbarButton('Add New', <Plus size={13} />, () => requireAdminThen(() => setAddOpen(true)))}
+            {toolbarButton('Delete', <Trash2 size={13} />, deleteTopic, !selected)}
+            {toolbarButton('Remove', <MinusCircle size={13} />, () => setSelected(false), !selected)}
+            {toolbarButton('Reorder', <GripVertical size={13} />, () => {
+              setActiveTab('Sub Topics');
+              toast({ title: 'Reorder mode', description: 'Sub-topics are shown for ordering.' });
+            })}
+          </div>
+        </div>
+
+        {loading && <div className="rounded-xl bg-white py-20 text-center text-sm text-gray-400">Loading topic…</div>}
+        {!loading && error && (
+          <div className="rounded-xl border border-red-100 bg-red-50 p-5 text-sm text-red-600">
+            {error}
+            <button type="button" onClick={loadTopic} className="ml-3 underline">Retry</button>
+          </div>
+        )}
+        {!loading && !error && topic && (
+          <>
+            <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white shadow-xs">
+              <div className="flex min-w-max items-center px-2 sm:px-4">
+                {TOPIC_WORKSPACE_TABS.map(tab => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTab(tab)}
+                    className={cx(
+                      'relative px-3 py-4 text-xs font-medium transition-colors sm:px-4',
+                      activeTab === tab ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800',
+                    )}
+                  >
+                    {tab}
+                    {activeTab === tab && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[#7c63e8]" />}
+                  </button>
+                ))}
+                <button type="button" className="inline-flex items-center gap-1 px-3 py-4 text-xs font-medium text-gray-500 hover:text-gray-800">
+                  More <ChevronRight size={13} />
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-100 bg-white/60 p-3 shadow-xs sm:p-4">
+              <p className="mb-3 px-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">
+                {courseName || 'Course'} · {activeTab}
+              </p>
+              {renderTabContent()}
+            </div>
+          </>
+        )}
+      </div>
+
+      {addOpen && topic && (
+        <Modal title={`Add New Sub-topic — ${topic.name}`} onClose={() => setAddOpen(false)}>
+          <form onSubmit={handleAddSubtopic} className="space-y-4">
+            <Field label="Sub-topic name">
+              <input
+                required
+                autoFocus
+                value={addName}
+                onChange={event => setAddName(event.target.value)}
+                placeholder="e.g. Safety Management Systems"
+                className="form-input"
+              />
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-cancel-topic-subtopic" variant="quiet" onClick={() => setAddOpen(false)}>Cancel</Button>
+              <Button testId="button-save-topic-subtopic" type="submit">Add Sub-topic</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {editOpen && topic && (
+        <Modal title="Edit Topic" onClose={() => setEditOpen(false)}>
+          <form onSubmit={handleEditTopic} className="space-y-4">
+            <Field label="Topic name">
+              <input required autoFocus value={editName} onChange={event => setEditName(event.target.value)} className="form-input" />
+            </Field>
+            <Field label="Thumbnail URL">
+              <input value={editThumb} onChange={event => setEditThumb(event.target.value)} placeholder="https://..." className="form-input" />
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-cancel-topic-edit" variant="quiet" onClick={() => setEditOpen(false)}>Cancel</Button>
+              <Button testId="button-save-topic-edit" type="submit">Save</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {showLogin && (
+        <Modal title="Admin login" onClose={() => { setShowLogin(false); setPendingAction(null); setLoginError(''); }}>
+          <p className="mb-4 text-sm text-gray-500">Enter your LMS admin credentials to manage this topic.</p>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <Field label="Username">
+              <input required autoFocus value={loginUser} onChange={event => setLoginUser(event.target.value)} placeholder="admin" className="form-input" autoComplete="username" />
+            </Field>
+            <Field label="Password">
+              <input required type="password" value={loginPass} onChange={event => setLoginPass(event.target.value)} className="form-input" autoComplete="current-password" />
+            </Field>
+            {loginError && <p className="text-sm text-red-600">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-topic-login" variant="quiet" onClick={() => { setShowLogin(false); setPendingAction(null); setLoginError(''); }}>Cancel</Button>
+              <Button testId="button-submit-topic-login" type="submit" disabled={loginBusy}>{loginBusy ? 'Signing in…' : 'Sign in'}</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function CourseStructurePage() {
   const { id = '' } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -2008,7 +2395,13 @@ function CourseStructurePage() {
 
                     {/* Info */}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-800 leading-snug">{idx + 1}. {topic.name}</p>
+                      <Link
+                        href={`/curriculum/courses/${id}/topics/${topic.id}`}
+                        data-testid={`link-topic-${topic.id}`}
+                        className="block text-sm font-semibold leading-snug text-gray-800 transition-colors hover:text-primary hover:underline"
+                      >
+                        {displayTopicName(topic.name, idx + 1)}
+                      </Link>
                       {topic.faculty && <p className="mt-0.5 text-xs text-gray-400">Faculty: <span className="text-gray-600">{topic.faculty}</span></p>}
                       {/* Subtopic count / toggle */}
                       <button
@@ -3728,7 +4121,7 @@ function LearnerSignUpPage() {
   const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
   return <div className="grid min-h-[100dvh] place-items-center bg-muted/40 px-4"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div>;
 }
-function AppRoutes() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/settings" component={SettingsPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+function AppRoutes() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/settings" component={SettingsPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId" component={TopicWorkspacePage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function AppRouter() { return <Switch><Route path="/sign-in/*?" component={LearnerSignInPage} /><Route path="/sign-up/*?" component={LearnerSignUpPage} /><Route component={AppRoutes} /></Switch>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
