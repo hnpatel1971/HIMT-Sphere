@@ -81,6 +81,7 @@ const topicDetail = [
     activities: [
       { id: "activity-navigation", title: "Navigation Rules & Watchkeeping", type: "Protected document", duration: "18 min", status: "complete", protected: true, resourceId: null, openUrl: null },
     ],
+    subtopics: [],
   },
   {
     id: "topic-02",
@@ -92,6 +93,7 @@ const topicDetail = [
       { id: "activity-bridge", title: "Bridge Resource Management", type: "Video lesson", duration: "24 min", status: "current", protected: true, resourceId: null, openUrl: null },
       { id: "activity-quiz",   title: "Knowledge check: Bridge procedures", type: "Quiz", duration: "12 questions", status: "locked", protected: false, resourceId: null, openUrl: null },
     ],
+    subtopics: [],
   },
   {
     id: "topic-03",
@@ -102,6 +104,7 @@ const topicDetail = [
     activities: [
       { id: "activity-passage", title: "Passage planning checklist", type: "Practical activity", duration: "30 min", status: "locked", protected: false, resourceId: null, openUrl: null },
     ],
+    subtopics: [],
   },
 ];
 
@@ -621,19 +624,29 @@ router.get("/courses/:courseId", async (req, res) => {
       resourceId: resource.id,
        openUrl: canOpenResources ? `/api/curriculum/resources/${resource.id}/open` : null,
     });
-    const learnerTopics = topics.map(topic => ({
-      id: topic.id,
-      title: topic.name,
-      duration: "Self-paced",
-      progress: 0,
-      locked: false,
-      activities: readyResources
-        .filter(resource => resource.topicId === topic.id || (
-          resource.subtopicId !== null
-          && subtopics.some(subtopic => subtopic.id === resource.subtopicId && subtopic.topicId === topic.id)
-        ))
-        .map(activityFor),
-    }));
+    const learnerTopics = topics.map(topic => {
+      const topicSubtopics = subtopics
+        .filter(subtopic => subtopic.topicId === topic.id)
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+      return {
+        id: topic.id,
+        title: topic.name,
+        duration: "Self-paced",
+        progress: 0,
+        locked: false,
+        activities: readyResources
+          .filter(resource => resource.topicId === topic.id && !resource.subtopicId)
+          .map(activityFor),
+        subtopics: topicSubtopics.map(subtopic => ({
+          id: subtopic.id,
+          title: subtopic.name,
+          activities: readyResources
+            .filter(resource => resource.subtopicId === subtopic.id)
+            .map(activityFor),
+        })),
+      };
+    });
     const courseLevelResources = readyResources.filter(resource => !resource.topicId && !resource.subtopicId);
     if (courseLevelResources.length) {
       learnerTopics.unshift({
@@ -643,6 +656,7 @@ router.get("/courses/:courseId", async (req, res) => {
         progress: 0,
         locked: false,
         activities: courseLevelResources.map(activityFor),
+        subtopics: [],
       });
     }
     res.json(GetCourseResponse.parse({

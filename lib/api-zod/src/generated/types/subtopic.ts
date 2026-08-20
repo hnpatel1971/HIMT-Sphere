@@ -6,14 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Activity } from './activity';
-import type { Subtopic } from './subtopic';
 
-export interface Topic {
+export interface Subtopic {
   id: string;
   title: string;
-  duration: string;
-  progress: number;
-  locked: boolean;
   activities: Activity[];
-  subtopics: Subtopic[];
 }

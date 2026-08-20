@@ -48,7 +48,7 @@ import {
 import type {
   Activity as ActivityType, AnalyticsOverview, Assignment, Certificate, Course, CourseDetail,
   CourseOutcome, CourseOutcomeInput, CurriculumCourse, Dashboard, Programme,
-  ProgrammeCourse, Session, Topic, User
+  ProgrammeCourse, Session, Subtopic, Topic, User
 } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -328,7 +328,32 @@ function CourseDetailPage() {
     <div className="grid gap-7 xl:grid-cols-[1fr_360px]"><section className="rounded-xl border border-border bg-card shadow-xs p-5 sm:p-7"><div className="flex items-end justify-between"><div><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Course route</p><h2 className="mt-1 text-xl font-bold">Structure & activities</h2></div><span className="text-xs font-semibold text-muted-foreground">{course.topics.length} topics</span></div><div className="mt-7 space-y-3">{course.topics.map((topic, index) => <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} />)}</div></section><aside className="space-y-5"><section className="rounded-xl border border-border bg-card shadow-xs p-6"><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">At a glance</p><div className="mt-5 space-y-5"><div><div className="flex justify-between text-sm"><span className="text-muted-foreground">Progress</span><b>{course.progress}%</b></div><div className="mt-2"><ProgressBar value={course.progress} /></div></div><InfoLine label="Language" value={course.language} /><InfoLine label="Learners" value={String(course.learners)} /><InfoLine label="Status" value={course.status} /></div></section><section className="rounded-xl border border-border bg-muted/40 p-6"><div className="flex gap-3"><GraduationCap size={18} className="shrink-0 text-primary" /><div><h3 className="font-bold text-sm">What you will be able to do</h3><ul className="mt-3 space-y-2 text-sm leading-relaxed text-muted-foreground">{course.objectives.map((objective) => <li key={objective} className="flex gap-2"><Check size={14} className="mt-1 shrink-0 text-primary" />{objective}</li>)}</ul></div></div></section></aside></div>
   </div>;
 }
-function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) { return <div className={cx('overflow-hidden rounded-xl border border-border', topic.locked && 'opacity-60')}><button data-testid={`button-topic-${topic.id}`} onClick={onToggle} className="flex w-full items-center gap-4 p-4 text-left hover:bg-muted"><span className="text-xs font-semibold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-sm font-bold">{topic.title}</h3>{topic.locked && <LockKeyhole size={13} className="text-muted-foreground" />}</div><div className="mt-2 flex items-center gap-3"><ProgressBar value={topic.progress} accent="bg-primary" /><span className="text-[11px] font-semibold text-muted-foreground">{topic.progress}%</span></div></div><span className="hidden text-[11px] font-semibold text-muted-foreground sm:block">{topic.duration}</span><ChevronDown size={16} className={cx('text-muted-foreground', open && 'rotate-180')} /></button>{open && <div className="border-t border-border bg-muted/30 p-2">{topic.activities.length ? topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />) : <p className="px-3 py-4 text-xs text-muted-foreground">No learning resources have been migrated for this topic yet.</p>}</div>}</div>; }
+function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) {
+  const hasContent = topic.activities.length > 0 || topic.subtopics.length > 0;
+  return <div className={cx('overflow-hidden rounded-xl border border-border', topic.locked && 'opacity-60')}>
+    <button data-testid={`button-topic-${topic.id}`} onClick={onToggle} className="flex w-full items-center gap-4 p-4 text-left hover:bg-muted">
+      <span className="text-xs font-semibold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
+      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-sm font-bold">{topic.title}</h3>{topic.locked && <LockKeyhole size={13} className="text-muted-foreground" />}</div><div className="mt-2 flex items-center gap-3"><ProgressBar value={topic.progress} accent="bg-primary" /><span className="text-[11px] font-semibold text-muted-foreground">{topic.progress}%</span></div></div>
+      <span className="hidden text-[11px] font-semibold text-muted-foreground sm:block">{topic.duration}</span><ChevronDown size={16} className={cx('text-muted-foreground', open && 'rotate-180')} />
+    </button>
+    {open && <div className="border-t border-border bg-muted/30 p-2">
+      {!hasContent && <p className="px-3 py-4 text-xs text-muted-foreground">No learning resources have been migrated for this topic yet.</p>}
+      {topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}
+      {topic.subtopics.map((subtopic, subtopicIndex) => <SubtopicBlock key={subtopic.id} subtopic={subtopic} index={subtopicIndex} />)}
+    </div>}
+  </div>;
+}
+function SubtopicBlock({ subtopic, index }: { subtopic: Subtopic; index: number }) {
+  return <div data-testid={`subtopic-${subtopic.id}`} className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex items-start gap-3 border-b border-border bg-muted/40 px-3 py-3">
+      <span className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-primary">Sub-topic {String(index + 1).padStart(2, '0')}</span>
+      <h4 className="min-w-0 flex-1 text-xs font-bold leading-relaxed">{subtopic.title}</h4>
+    </div>
+    {subtopic.activities.length > 0
+      ? <div className="p-1">{subtopic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>
+      : <p className="px-3 py-3 text-xs text-muted-foreground">No learning resources have been migrated for this sub-topic yet.</p>}
+  </div>;
+}
 function ActivityRow({ activity }: { activity: ActivityType }) {
   const isAvailable = Boolean(activity.openUrl);
   return <button

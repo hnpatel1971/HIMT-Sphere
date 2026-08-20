@@ -180,6 +180,20 @@ export const GetCourseResponse = zod.object({
   "protected": zod.boolean(),
   "resourceId": zod.string().nullable(),
   "openUrl": zod.string().nullable()
+})),
+  "subtopics": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "activities": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "type": zod.string(),
+  "duration": zod.string(),
+  "status": zod.string(),
+  "protected": zod.boolean(),
+  "resourceId": zod.string().nullable(),
+  "openUrl": zod.string().nullable()
+}))
 }))
 }))
 }))

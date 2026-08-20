@@ -32,6 +32,7 @@ export * from './metricPoint';
 export * from './programme';
 export * from './programmeCourse';
 export * from './session';
+export * from './subtopic';
 export * from './topic';
 export * from './user';
 export * from './userGroupUpdate';

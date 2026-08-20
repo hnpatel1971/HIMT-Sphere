@@ -430,7 +430,21 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Activity"
-      required: [id, title, duration, progress, locked, activities]
+        subtopics:
+          type: array
+          items:
+            $ref: "#/components/schemas/Subtopic"
+      required: [id, title, duration, progress, locked, activities, subtopics]
+    Subtopic:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Activity"
+      required: [id, title, activities]
     Activity:
       type: object
       properties:

@@ -52,6 +52,12 @@ export interface Activity {
   openUrl: string | null;
 }
 
+export interface Subtopic {
+  id: string;
+  title: string;
+  activities: Activity[];
+}
+
 export interface Topic {
   id: string;
   title: string;
@@ -59,6 +65,7 @@ export interface Topic {
   progress: number;
   locked: boolean;
   activities: Activity[];
+  subtopics: Subtopic[];
 }
 
 export type CourseDetail = Course & {
