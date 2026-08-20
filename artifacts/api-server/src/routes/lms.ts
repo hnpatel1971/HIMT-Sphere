@@ -2227,17 +2227,34 @@ async function fetchTriByteResourcePage(
   url: string,
   session: { cookie: string; strategy: string },
 ): Promise<string> {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      ...(isTriByteUrl(url) ? { Cookie: session.cookie } : {}),
-    },
-  });
-  if (!response.ok) throw new Error(`TriByte resource page responded ${response.status}`);
-  const html = await response.text();
-  if (isTBLoginPage(html)) throw new Error("TriByte rejected the stored login — check the configured credentials");
-  return html;
+  const pagePath = new URL(url).pathname;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        ...(isTriByteUrl(url) ? { Cookie: session.cookie } : {}),
+      },
+    });
+    if (response.ok) {
+      const html = await response.text();
+      if (!isTBLoginPage(html)) return html;
+    }
+
+    const canRefresh = isTriByteUrl(url) && attempt === 0 && [401, 403].includes(response.status);
+    if (!canRefresh) {
+      throw new Error(`TriByte resource page ${pagePath} responded ${response.status}`);
+    }
+
+    invalidateTBSessionCache();
+    const refreshed = await resolveTriByteCookie();
+    if (!refreshed) {
+      throw new Error("TriByte rejected the stored login — check the configured credentials");
+    }
+    session.cookie = refreshed.cookie;
+    session.strategy = refreshed.strategy;
+  }
+  throw new Error("TriByte rejected the stored login — check the configured credentials");
 }
 
 function cleanTriByteText(value: string): string {

@@ -24,3 +24,11 @@ TriByte resource migrations have **no application-level size ceiling**. File siz
 **Why:** TriByte uses `/edit/contents` for sub-topic containers but `/edit/content/tab` for individual document/video records. The latter is where protected clipping-download and video upload metadata are exposed, so treating both paths as the same link shape skips valid content records.
 
 **How to apply:** Use separate discovery patterns for sub-topic containers and content records. Parse each discovered content-record page for protected downloads and media metadata; an empty media URL there still means recovery requires the source file, not a different downloader.
+
+## Empty content records
+
+**Rule:** A discovered TriByte content record may be structurally valid but have no attached learner asset; do not synthesize a resource row for it.
+
+**Why:** Some records expose only an empty thumbnail/upload field and administrative controls. A successful authenticated scan with zero downloadable or playable URLs is a verified empty-source result, not evidence that the migration dropped a file.
+
+**How to apply:** Report empty-source nodes separately from pending or failed transfers, and keep the parent topic/sub-topic visible even when its resource list is empty.
