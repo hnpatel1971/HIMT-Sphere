@@ -93,11 +93,19 @@ export function parseTriByteResources(html: string, baseUrl: string): ParsedTriB
     .match(/<input\b(?=[^>]*\bname=["']title["'])[^>]*>/i)?.[0]
     ?.match(/\bvalue=["']([^"']*)["']/i)?.[1];
   const pageTitle = formTitle ? cleanHtml(formTitle) : "";
+  // TriByte's protected recording download URLs are intentionally extensionless.
+  // On an individual video-content form, the upload/re-upload action is the
+  // stable signal that these clipping links represent videos rather than generic
+  // learning resources.
+  const hasVideoUploadControl = /\/upload\/videos\?[^"'\s>]*\bnid=\d+/i.test(html);
   const add = (rawUrl: string, rawLabel: string) => {
     const sourceUrl = toAbsoluteUrl(rawUrl, baseUrl);
     if (!sourceUrl) return;
     const fileName = fileNameFromUrl(sourceUrl);
-    const context = `${cleanHtml(rawLabel)} ${sourceUrl}`;
+    const clippingVideoContext = hasVideoUploadControl && TRIBYTE_CONTENT_DOWNLOAD.test(sourceUrl)
+      ? " video"
+      : "";
+    const context = `${cleanHtml(rawLabel)} ${sourceUrl}${clippingVideoContext}`;
     if (!shouldKeep(sourceUrl, context)) return;
     if (seen.has(sourceUrl)) return;
     seen.add(sourceUrl);

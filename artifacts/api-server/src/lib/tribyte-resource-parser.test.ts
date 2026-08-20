@@ -35,3 +35,18 @@ test("keeps TriByte protected PDF downloads without persisting the admin email",
     fileName: "resource.pdf",
   }]);
 });
+
+test("classifies extensionless protected clipping downloads as videos on video-content pages", () => {
+  const resources = parseTriByteResources(`
+    <input name="title" value="Fire fighting on board ship part 1" />
+    <a href="/reviewer/download/clipping?nid=428318&amp;uname=admin@example.com">Download</a>
+    <a href="/upload/videos?nid=428318&amp;client=elearning-himtmarine-com&amp;reupload=true">Re-upload</a>
+  `, "https://admin.learn.himtelearning.com/node/428318/edit/content/tab");
+
+  assert.deepEqual(resources, [{
+    sourceUrl: "https://admin.learn.himtelearning.com/reviewer/download/clipping?nid=428318",
+    title: "Fire fighting on board ship part 1",
+    resourceType: "Video",
+    fileName: "clipping",
+  }]);
+});

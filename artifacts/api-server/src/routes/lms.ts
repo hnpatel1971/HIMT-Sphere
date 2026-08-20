@@ -2377,6 +2377,27 @@ async function migrateTriByteResource(
   const [existing] = await db.select().from(courseResourcesTable)
     .where(eq(courseResourcesTable.sourceIdentity, sourceIdentity));
   if (existing?.status === "ready" && (existing.storagePath || !isTriByteUrl(existing.sourceUrl))) {
+    // Parser improvements can clarify the type or placement of an already
+    // migrated resource. Keep the private object intact while refreshing that
+    // source metadata, so a single-course repair never downloads it again.
+    if (
+      existing.topicId !== resource.topicId
+      || existing.subtopicId !== resource.subtopicId
+      || existing.title !== resource.title.slice(0, 500)
+      || existing.resourceType !== resource.resourceType
+      || existing.fileName !== resource.fileName.slice(0, 500)
+      || existing.order !== order
+    ) {
+      await db.update(courseResourcesTable).set({
+        topicId: resource.topicId,
+        subtopicId: resource.subtopicId,
+        title: resource.title.slice(0, 500),
+        resourceType: resource.resourceType,
+        fileName: resource.fileName.slice(0, 500),
+        order,
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, existing.id));
+    }
     return "existing";
   }
 
@@ -2680,6 +2701,40 @@ router.post("/curriculum/resource-imports", requireAdmin, async (_req, res) => {
     res.status(202).json({ job: await getResourceImportJob(jobId) });
   } catch {
     res.status(500).json({ error: "Could not start resource import" });
+  }
+});
+
+router.post("/curriculum/courses/:courseId/resource-import", requireAdmin, async (req, res) => {
+  try {
+    const courseId = String(req.params.courseId);
+    const jobs = await db.select().from(courseResourceImportJobsTable);
+    if (jobs.some(job => job.status === "queued" || job.status === "running")) {
+      res.status(409).json({ error: "A resource import is already running" });
+      return;
+    }
+    const [course] = await db.select().from(curriculumCoursesTable)
+      .where(eq(curriculumCoursesTable.id, courseId));
+    if (!course) {
+      res.status(404).json({ error: "Curriculum course not found" });
+      return;
+    }
+    const jobId = `tri-resource-${randomBytes(8).toString("hex")}`;
+    await db.insert(courseResourceImportJobsTable).values({
+      id: jobId,
+      status: "queued",
+      totalCourses: 1,
+    });
+    await db.insert(courseResourceImportJobItemsTable).values({
+      id: `tri-resource-item-${jobId}-${course.id}`,
+      jobId,
+      courseId: course.id,
+      courseName: course.name,
+      status: "pending",
+    });
+    queueResourceImportJob(jobId);
+    res.status(202).json({ job: await getResourceImportJob(jobId) });
+  } catch {
+    res.status(500).json({ error: "Could not start course resource import" });
   }
 });
 
