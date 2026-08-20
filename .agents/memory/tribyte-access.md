@@ -56,3 +56,11 @@ description: How TriByte LMS is structured, login approach, and what each course
 **Why:** The current themed login page has an empty title and uses `user-login-1`. Both a rejected login and an unauthenticated request still receive an HTTP 200 response and guest-session cookies.
 
 **How to apply:** After form login, request a protected course-list page before caching its cookie. Reject the login if either response contains the login form, so scraping failures are not misreported as missing course content.
+
+## Course-list Import toolbar
+
+**Rule:** Treat the course-list Import menu as an inbound spreadsheet-upload workflow, not as a resource export or recovery source.
+
+**Why:** Its TOC, course, and faculty entries all render multipart upload forms with a `files[upload_sheet]` input. The course option accepts a category-import CSV and has no course-content retrieval action.
+
+**How to apply:** Do not submit an Import form while investigating missing source files. It cannot retrieve the original media and may create or update TriByte records.
