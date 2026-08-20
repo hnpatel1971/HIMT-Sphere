@@ -12,8 +12,8 @@ const DOCUMENT_EXTENSION = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|rtf)(?:[?#
 const RECORDING_EXTENSION = /\.(mp4|m4v|mov|webm|avi|mp3|wav|m4a|ogg)(?:[?#].*)?$/i;
 const PACKAGE_EXTENSION = /\.(zip|rar|7z|scorm)(?:[?#].*)?$/i;
 const RESOURCE_LANGUAGE = /\b(document|download|attachment|resource|recording|video|audio|file|package|scorm|material|handout|presentation)\b/i;
-const MEDIA_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com|drive\.google\.com|onedrive\.live\.com|sharepoint\.com)\b/i;
-const VIDEO_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com)\b/i;
+const MEDIA_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com|publitas\.com|drive\.google\.com|onedrive\.live\.com|sharepoint\.com)\b/i;
+const VIDEO_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com|publitas\.com)\b/i;
 const ADMIN_ONLY_PATH = /\/(user|reviewer|generate|apps|node\/\d+\/edit)(?:\/|$|\?)/i;
 const NAVIGATION_PATH = /\/(?:taxonomy\/term|reviewer\/topics|category)(?:\/|$|\?)/i;
 const TRIBYTE_FILE_PATH = /\/(?:sites\/(?:default|all)\/files|files|file|download)(?:\/|$)/i;
@@ -131,6 +131,18 @@ export function parseTriByteResources(html: string, baseUrl: string): ParsedTriB
   while ((media = mediaPattern.exec(html)) !== null) {
     const src = media[1].match(/\bsrc\s*=\s*["']([^"']+)["']/i)?.[1];
     if (src) add(src, media[0]);
+  }
+
+  // TriByte's final content form can hold external video players in fields
+  // rather than anchor or media tags. These values are only accepted when the
+  // URL passes the same trusted-host checks as other embedded media.
+  const clippingUrlField = /<input\b([^>]*)>/gi;
+  let field: RegExpExecArray | null;
+  while ((field = clippingUrlField.exec(html)) !== null) {
+    const name = field[1].match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1] ?? "";
+    if (!/^field_clipping_(?:wurl|murl)\[\d+\]\[value\]$/i.test(name)) continue;
+    const value = field[1].match(/\bvalue\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (value) add(value, `Video ${pageTitle}`);
   }
 
   return resources;

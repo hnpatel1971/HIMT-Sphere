@@ -2076,6 +2076,9 @@ const EXTERNAL_VIDEO_HOSTS = new Set([
   "youtube.com",
   "vimeo.com",
   "www.vimeo.com",
+  // TriByte stores certain final-node videos in a field_clipping_wurl form
+  // value pointing at this provider rather than in a direct media tag.
+  "view.publitas.com",
 ]);
 
 function stableResourceId(value: string): string {

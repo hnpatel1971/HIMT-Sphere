@@ -50,3 +50,17 @@ test("classifies extensionless protected clipping downloads as videos on video-c
     fileName: "clipping",
   }]);
 });
+
+test("keeps a Publitas video stored in a final content form field", () => {
+  const resources = parseTriByteResources(`
+    <input name="title" value="HANDOUT" />
+    <input name="field_clipping_wurl[0][value]" value="https://view.publitas.com/himt/refresher-for-medical-first-aid" />
+  `, "https://admin.learn.himtelearning.com/node/413239/edit/content/tab");
+
+  assert.deepEqual(resources, [{
+    sourceUrl: "https://view.publitas.com/himt/refresher-for-medical-first-aid",
+    title: "Video HANDOUT",
+    resourceType: "Video",
+    fileName: "refresher-for-medical-first-aid",
+  }]);
+});

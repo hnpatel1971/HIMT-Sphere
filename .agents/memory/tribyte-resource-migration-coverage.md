@@ -25,10 +25,18 @@ TriByte resource migrations have **no application-level size ceiling**. File siz
 
 **How to apply:** Use separate discovery patterns for sub-topic containers and content records. Parse each discovered content-record page for protected downloads and media metadata; an empty media URL there still means recovery requires the source file, not a different downloader.
 
+## Form-field media URLs
+
+**Rule:** Parse approved media URLs from a final content record’s `field_clipping_wurl` and `field_clipping_murl` form values as well as from links and media tags.
+
+**Why:** TriByte can store a playable external video in a Drupal text field rather than an `<a>`, `<video>`, or `<iframe>`. Treating the absence of a direct download link as an empty node misses those resources.
+
+**How to apply:** Inspect the exact final-node form shape. Accept only explicitly reviewed external hosts, store the content-record node as the resource identity, and open the external media through the same learner access check used for stored files.
+
 ## Empty content records
 
-**Rule:** A discovered TriByte content record may be structurally valid but have no attached learner asset; do not synthesize a resource row for it.
+**Rule:** A discovered TriByte content record may be structurally valid but have no attached learner asset; do not synthesize a resource row for it until both direct media and supported form-field media have been checked.
 
-**Why:** Some records expose only an empty thumbnail/upload field and administrative controls. A successful authenticated scan with zero downloadable or playable URLs is a verified empty-source result, not evidence that the migration dropped a file.
+**Why:** Some records expose only an empty thumbnail/upload field and administrative controls, while others place their playable URL in a form field. Only a scan that finds neither is a verified empty source.
 
 **How to apply:** Report empty-source nodes separately from pending or failed transfers, and keep the parent topic/sub-topic visible even when its resource list is empty.
