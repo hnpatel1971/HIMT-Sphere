@@ -16,3 +16,11 @@ TriByte resource migrations have **no application-level size ceiling**. File siz
 **Why:** HIMT chose catalogue completeness over a transfer cap. The former integer file-size field could not record uploads over roughly 2 GB even after their streams finished, so resilient retries must preserve and reuse completed objects.
 
 **How to apply:** Do not add header or streamed-byte limits. Preserve `bigint` storage for resource sizes. When retrying, process only failed or pending course items; a deterministic existing private object should be registered as ready rather than fetched a second time.
+
+## Content-record depth
+
+**Rule:** Traverse a sub-topic’s `Contents` view one level further into each content-record page (`/node/{content-id}/edit/content/tab`) before deciding which resource URLs are available.
+
+**Why:** TriByte uses `/edit/contents` for sub-topic containers but `/edit/content/tab` for individual document/video records. The latter is where protected clipping-download and video upload metadata are exposed, so treating both paths as the same link shape skips valid content records.
+
+**How to apply:** Use separate discovery patterns for sub-topic containers and content records. Parse each discovered content-record page for protected downloads and media metadata; an empty media URL there still means recovery requires the source file, not a different downloader.
