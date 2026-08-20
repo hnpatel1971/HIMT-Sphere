@@ -1,0 +1,28 @@
+5. Protected document and video delivery
+The controls below are intended to materially reduce unauthorised copying and provide traceability. They shall not be presented as protection against every operating-system tool or an external camera.
+5.1 Protected document viewer
+ID	Requirement	Priority
+DRM-001	Keep original protected documents in private storage and never expose a permanent or public source URL to a learner.	M
+DRM-002	Render protected documents server-side as page images, tiles or another non-source representation and authorise each request.	M
+DRM-003	Use short-lived, user-bound and session-bound tokens for every protected content request.	M
+DRM-004	Remove ordinary download, print and Save As functions and prevent direct unauthorised access to cached or historical URLs.	M
+DRM-005	Apply Cache-Control no-store and appropriate content-security, referrer and framing policies to protected-viewer responses.	M
+DRM-006	Expire protected content when the course/subscription expires or access is revoked.	M
+DRM-007	Record user, document, page/activity, timestamp, session, device and outcome in access logs.	M
+DRM-008	Display a repeated watermark containing the logged-in learner's registered email address on every page.	M
+DRM-009	Allow optional watermark fields for learner name, learner ID, timestamp, session ID and confidentiality notice.	M
+DRM-010	Embed the watermark into the rendered content rather than relying only on an easily removable page overlay.	M
+DRM-011	Vary watermark position/pattern where configured and maintain readability at supported zoom levels.	M
+DRM-012	On Android native applications, enable secure-window controls so supported screenshots, recordings and insecure casting show blank protected content.	M
+DRM-013	On iOS native applications, detect capture/recording/mirroring state and immediately obscure or replace protected content where supported.	M
+DRM-014	State clearly in acceptance criteria that a browser or external camera cannot be made universally screenshot-proof.	M
+DRM-015	Provide an accessible protected-content mode approved by HIMT that balances assistive-technology access with intellectual-property controls.	M
+
+5.2 Protected video
+ID	Requirement	Priority
+VID-001	Deliver protected video through adaptive streaming rather than a permanent direct MP4 URL.	M
+VID-002	Use signed expiring manifests/segments and encryption; support Widevine, FairPlay and PlayReady DRM where commercially approved.	S
+VID-003	Overlay the learner email watermark during protected playback.	M
+VID-004	Remember playback position and support configurable speed, captions and transcripts.	M
+VID-005	Track meaningful playback completion rather than treating file-open as completion.	M
+VID-006	Apply native screen-capture restrictions to protected video on supported applications.	M
