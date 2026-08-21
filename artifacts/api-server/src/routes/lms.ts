@@ -1,8 +1,8 @@
 import { Router, type IRouter } from "express";
 import "express-session"; // ensure SessionData augmentation from auth.ts is loaded
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from "crypto";
 import { Readable } from "stream";
-import { and, eq, ilike, or } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, lt, or, sql } from "drizzle-orm";
 import { clerkClient, getAuth } from "@clerk/express";
 import { db, pool } from "@workspace/db";
 import { parseTriByteCoursePage, type TriByteScrapedCourse } from "../lib/tribyte-course-parser";
@@ -36,6 +36,7 @@ import {
   uploadJobs as uploadJobsTable,
   faqCategories as faqTable,
   appSettings as appSettingsTable,
+  contentAccessLogs as contentAccessLogsTable,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import {
@@ -464,6 +465,73 @@ export async function ensureAppSettingsTable() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+}
+
+/**
+ * Ensure DRM audit infrastructure exists:
+ *   1. content_access_logs — one row per protected content request
+ *   2. expires_at on learner_course_access — DRM-006 enrollment expiry
+ * Both use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS so re-running is safe.
+ */
+export async function ensureAccessLogsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_access_logs (
+      id             TEXT PRIMARY KEY,
+      user_id        TEXT,
+      resource_id    TEXT NOT NULL,
+      course_id      TEXT NOT NULL,
+      action         TEXT NOT NULL,
+      session_id     TEXT,
+      user_agent     TEXT,
+      ip_address     TEXT,
+      outcome_detail TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE learner_course_access
+    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+  `);
+}
+
+// ── DRM-007: content access logging ──────────────────────────────────────────
+
+type AccessAction = "view_attempt" | "view_success" | "view_denied" | "view_error";
+
+/**
+ * Insert one DRM audit row for a protected content request.
+ * Failures are swallowed with a warning so they never interrupt content delivery.
+ */
+async function logContentAccess(opts: {
+  req: import("express").Request;
+  resourceId: string;
+  courseId: string;
+  action: AccessAction;
+  outcomeDetail?: string;
+}): Promise<void> {
+  try {
+    const { req, resourceId, courseId, action, outcomeDetail } = opts;
+    const clerkUserId = getAuth(req).userId ?? null;
+    const sessionId   = req.sessionID ?? null;
+    const userAgent   = (req.headers["user-agent"] ?? "").slice(0, 512) || null;
+    // Use the socket peer address as the trusted IP; X-Forwarded-For is not used
+    // because the ingress layer may not strip client-supplied values, making it
+    // trivially forgeable. The peer address is always the actual connecting party.
+    const rawIp       = req.socket.remoteAddress || null;
+    await db.insert(contentAccessLogsTable).values({
+      id:            randomUUID(),
+      userId:        clerkUserId,
+      resourceId,
+      courseId,
+      action,
+      sessionId:     sessionId?.slice(0, 128) ?? null,
+      userAgent,
+      ipAddress:     rawIp?.slice(0, 64) ?? null,
+      outcomeDetail: outcomeDetail?.slice(0, 500) ?? null,
+    });
+  } catch (err) {
+    logger.warn({ err }, "content_access_logs insert failed — continuing");
+  }
 }
 
 // ── Symmetric encryption helpers for sensitive settings stored in app_settings ─
@@ -2873,6 +2941,8 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
   const isAdminUser = req.session.isAdmin === true;
   const clerkUserId = getAuth(req).userId;
   if (!isAdminUser && !clerkUserId) {
+    // DRM-007: log auth failure even before resource lookup (use param ID)
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: "unauthenticated" });
     res.status(401).json({ error: "Sign in to preview this resource" });
     return;
   }
@@ -2896,17 +2966,20 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
       const isMediaType = resource.resourceType === "Video" || resource.resourceType === "Recording";
       const isPublitasResource = resource.sourceUrl.includes("view.publitas.com");
       if (!isMediaType && !isPublitasResource) {
+        await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_document_redirect_blocked" });
         res.status(403).json({
           error: "Document content must be accessed through the secure page viewer.",
           hint: "Use GET /admin-view/page-count and /admin-view/page/:n instead.",
         });
         return;
       }
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "external_redirect" });
       res.redirect(302, resource.sourceUrl);
       return;
     }
     // DRM: stored non-media files are served only via the page-image renderer.
     if (resource.resourceType !== "Video" && resource.resourceType !== "Recording") {
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_stored_document_blocked" });
       res.status(403).json({
         error: "Document content must be accessed through the secure page viewer.",
         hint: "Use GET /admin-view/page-count and /admin-view/page/:n instead.",
@@ -2925,8 +2998,10 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
+    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: `media_stream:${resource.resourceType}` });
     file.createReadStream().pipe(res);
   } catch (error) {
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_error", outcomeDetail: String(error) });
     logger.error({ error }, "Could not serve resource preview");
     res.status(500).json({ error: "Could not open resource" });
   }
@@ -2952,12 +3027,31 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
     }
     if (!(await learnerCanAccessCourse(req, resource.courseId))) {
       const signedIn = Boolean(getAuth(req).userId);
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: signedIn ? "not_enrolled" : "unauthenticated" });
       res.status(signedIn ? 403 : 401).json({
         error: signedIn
           ? "You are not enrolled in this course"
           : "Learner sign-in required",
       });
       return;
+    }
+    // DRM-006: enrollment expiry — check after access grant so admins always bypass
+    if (req.session.isAdmin !== true) {
+      const learnerForExpiry = await resolveLearner(req);
+      if (learnerForExpiry) {
+        const [access] = await db
+          .select({ expiresAt: learnerCourseAccessTable.expiresAt })
+          .from(learnerCourseAccessTable)
+          .where(and(
+            eq(learnerCourseAccessTable.clerkUserId, learnerForExpiry.clerkUserId),
+            eq(learnerCourseAccessTable.courseId, resource.courseId),
+          ));
+        if (access?.expiresAt && new Date() > access.expiresAt) {
+          await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "enrollment_expired" });
+          res.status(403).json({ error: "Your enrollment in this course has expired. Please contact your administrator." });
+          return;
+        }
+      }
     }
     if (!resource.storagePath) {
       if (isTriByteUrl(resource.sourceUrl)) {
@@ -2973,17 +3067,20 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
       const isMediaType = resource.resourceType === "Video" || resource.resourceType === "Recording";
       const isPublitasResource = resource.sourceUrl?.includes("view.publitas.com");
       if (!isMediaType && !isPublitasResource) {
+        await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_document_redirect_blocked" });
         res.status(403).json({
           error: "Document content must be accessed through the secure page viewer.",
           hint: "Use GET /open/page-count and /open/page/:n instead.",
         });
         return;
       }
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "external_redirect" });
       res.redirect(302, resource.sourceUrl);
       return;
     }
     // DRM: stored non-media files are served only via the page-image renderer.
     if (resource.resourceType !== "Video" && resource.resourceType !== "Recording") {
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_stored_document_blocked" });
       res.status(403).json({
         error: "Document content must be accessed through the secure page viewer.",
         hint: "Use GET /open/page-count and /open/page/:n instead.",
@@ -3002,8 +3099,10 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
+    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: `media_stream:${resource.resourceType}` });
     file.createReadStream().pipe(res);
   } catch (error) {
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_error", outcomeDetail: String(error) });
     logger.error({ error: publicResourceImportError(error) }, "Could not serve learning resource");
     res.status(500).json({ error: "Could not open learning resource" });
   }
@@ -3065,6 +3164,7 @@ router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req
   }
   // Admin-view routes require a valid admin session — not just any Clerk identity.
   if (req.session.isAdmin !== true) {
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: "admin_session_required" });
     res.status(403).json({ error: "Admin access required" }); return;
   }
   try {
@@ -3078,6 +3178,7 @@ router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req
     } else if (resource.sourceUrl?.includes("view.publitas.com")) {
       // Publitas is a web-hosted interactive publication — the viewer URL returns HTML,
       // not a downloadable PDF. Signal the client to use the server-side iframe embed.
+      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: "doc_session:publitas" });
       res.json({ pageCount: null, isPdf: false, externalViewer: "publitas" }); return;
     } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
       docStream = await fetchExternalDocumentStream(resource.sourceUrl);
@@ -3085,6 +3186,8 @@ router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req
       res.json({ pageCount: null, isPdf: false }); return;
     }
     const pageCount = await getPageCountFromStream(docStream, resource.mimeType);
+    // DRM-007: log document view session start (page-count = learner opened the doc viewer)
+    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: pageCount !== null ? "view_success" : "view_error", outcomeDetail: pageCount !== null ? `doc_session:${pageCount}pp` : "page_count_null" });
     res.json({ pageCount, isPdf: pageCount !== null });
   } catch (error) {
     logger.error({ error }, "admin page-count failed");
@@ -3101,6 +3204,7 @@ router.get("/curriculum/resources/:resourceId/admin-view/page/:pageNum", async (
   }
   // Admin-view routes require a valid admin session — not just any Clerk identity.
   if (req.session.isAdmin !== true) {
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: "admin_session_required" });
     res.status(403).json({ error: "Admin access required" }); return;
   }
   const pageNum = parseInt(req.params.pageNum, 10);
@@ -3126,9 +3230,11 @@ router.get("/curriculum/resources/:resourceId/admin-view/page/:pageNum", async (
       pageNum, watermarkLine1: line1, watermarkLine2: line2,
       mimeType: resource.mimeType,
     });
+    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: `page_render:${pageNum}` });
     setPageImageHeaders(res);
     res.end(png);
   } catch (error) {
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_error", outcomeDetail: String(error).slice(0, 200) });
     logger.error({ error }, "admin page render failed");
     res.status(500).json({ error: "Could not render page" });
   }
@@ -3147,7 +3253,25 @@ router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res)
     if (!resource || resource.status !== "ready") { res.status(404).json({ error: "Resource not available" }); return; }
     if (!(await learnerCanAccessCourse(req, resource.courseId))) {
       const signedIn = Boolean(getAuth(req).userId);
+      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_denied", outcomeDetail: signedIn ? "not_enrolled" : "unauthenticated" });
       res.status(signedIn ? 403 : 401).json({ error: signedIn ? "Not enrolled in this course" : "Sign in required" }); return;
+    }
+    // DRM-006: enrollment expiry
+    if (req.session.isAdmin !== true) {
+      const learnerForExpiry = await resolveLearner(req);
+      if (learnerForExpiry) {
+        const [access] = await db
+          .select({ expiresAt: learnerCourseAccessTable.expiresAt })
+          .from(learnerCourseAccessTable)
+          .where(and(
+            eq(learnerCourseAccessTable.clerkUserId, learnerForExpiry.clerkUserId),
+            eq(learnerCourseAccessTable.courseId, resource.courseId),
+          ));
+        if (access?.expiresAt && new Date() > access.expiresAt) {
+          await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_denied", outcomeDetail: "enrollment_expired" });
+          res.status(403).json({ error: "Your enrollment in this course has expired." }); return;
+        }
+      }
     }
     let docStream: Readable;
     if (resource.storagePath) {
@@ -3156,6 +3280,7 @@ router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res)
     } else if (resource.sourceUrl?.includes("view.publitas.com")) {
       // Publitas publications are web-hosted interactive content, not downloadable PDFs.
       // Signal the client to use the server-side iframe embed path instead.
+      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: "doc_session:publitas" });
       res.json({ pageCount: null, isPdf: false, externalViewer: "publitas" }); return;
     } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
       docStream = await fetchExternalDocumentStream(resource.sourceUrl);
@@ -3163,6 +3288,7 @@ router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res)
       res.json({ pageCount: null, isPdf: false }); return;
     }
     const pageCount = await getPageCountFromStream(docStream, resource.mimeType);
+    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: pageCount !== null ? "view_success" : "view_error", outcomeDetail: pageCount !== null ? `doc_session:${pageCount}pp` : "page_count_null" });
     res.json({ pageCount, isPdf: pageCount !== null });
   } catch (error) {
     logger.error({ error }, "learner page-count failed");
@@ -3187,7 +3313,25 @@ router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, r
     if (!resource || resource.status !== "ready") { res.status(404).json({ error: "Resource not available" }); return; }
     if (!(await learnerCanAccessCourse(req, resource.courseId))) {
       const signedIn = Boolean(getAuth(req).userId);
+      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_denied", outcomeDetail: signedIn ? "not_enrolled" : "unauthenticated" });
       res.status(signedIn ? 403 : 401).json({ error: signedIn ? "Not enrolled in this course" : "Sign in required" }); return;
+    }
+    // DRM-006: enrollment expiry — enforced on every page render, not only at session start
+    if (req.session.isAdmin !== true) {
+      const learnerForExpiry = await resolveLearner(req);
+      if (learnerForExpiry) {
+        const [access] = await db
+          .select({ expiresAt: learnerCourseAccessTable.expiresAt })
+          .from(learnerCourseAccessTable)
+          .where(and(
+            eq(learnerCourseAccessTable.clerkUserId, learnerForExpiry.clerkUserId),
+            eq(learnerCourseAccessTable.courseId, resource.courseId),
+          ));
+        if (access?.expiresAt && new Date() > access.expiresAt) {
+          await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_denied", outcomeDetail: "enrollment_expired" });
+          res.status(403).json({ error: "Your enrollment in this course has expired. Please contact your administrator." }); return;
+        }
+      }
     }
     let docStream: Readable;
     if (resource.storagePath) {
@@ -3204,9 +3348,11 @@ router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, r
       pageNum, watermarkLine1: line1, watermarkLine2: line2,
       mimeType: resource.mimeType,
     });
+    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: `page_render:${pageNum}` });
     setPageImageHeaders(res);
     res.end(png);
   } catch (error) {
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_error", outcomeDetail: String(error).slice(0, 200) });
     logger.error({ error }, "learner page render failed");
     res.status(500).json({ error: "Could not render page" });
   }
@@ -3788,6 +3934,66 @@ router.post("/curriculum/retry-unavailable", async (req, res) => {
   }
 
   res.json({ tried: unavailable.length, fixed, failed, details });
+});
+
+// ─── DRM-007: access log query ────────────────────────────────────────────────
+
+/**
+ * GET /curriculum/access-logs
+ * Admin-only paginated access log with filters for user, resource, date range, outcome.
+ */
+router.get("/curriculum/access-logs", requireAdmin, async (req, res) => {
+  const { userId, resourceId, dateFrom, dateTo, outcome, page = "1", limit = "50" } = req.query as Record<string, string | undefined>;
+  const pageNum  = Math.max(1, parseInt(page  ?? "1",  10));
+  const limitNum = Math.min(200, Math.max(1, parseInt(limit ?? "50", 10)));
+  const offset   = (pageNum - 1) * limitNum;
+  try {
+    const rows = await db
+      .select({
+        id:            contentAccessLogsTable.id,
+        userId:        contentAccessLogsTable.userId,
+        resourceId:    contentAccessLogsTable.resourceId,
+        courseId:      contentAccessLogsTable.courseId,
+        action:        contentAccessLogsTable.action,
+        sessionId:     contentAccessLogsTable.sessionId,
+        userAgent:     contentAccessLogsTable.userAgent,
+        ipAddress:     contentAccessLogsTable.ipAddress,
+        outcomeDetail: contentAccessLogsTable.outcomeDetail,
+        createdAt:     contentAccessLogsTable.createdAt,
+        resourceTitle: courseResourcesTable.title,
+        resourceType:  courseResourcesTable.resourceType,
+        courseTitle:   curriculumCoursesTable.name,
+      })
+      .from(contentAccessLogsTable)
+      .leftJoin(courseResourcesTable,   eq(contentAccessLogsTable.resourceId, courseResourcesTable.id))
+      .leftJoin(curriculumCoursesTable, eq(contentAccessLogsTable.courseId,   curriculumCoursesTable.id))
+      .where(and(
+        userId     ? ilike(contentAccessLogsTable.userId, `%${userId}%`)         : undefined,
+        resourceId ? eq(contentAccessLogsTable.resourceId, resourceId)           : undefined,
+        outcome    ? eq(contentAccessLogsTable.action, outcome)                  : undefined,
+        dateFrom   ? gte(contentAccessLogsTable.createdAt, new Date(dateFrom))   : undefined,
+        dateTo     ? lt(contentAccessLogsTable.createdAt, (() => { const d = new Date(dateTo); d.setDate(d.getDate() + 1); return d; })()) : undefined,
+      ))
+      .orderBy(desc(contentAccessLogsTable.createdAt))
+      .limit(limitNum)
+      .offset(offset);
+
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(contentAccessLogsTable)
+      .where(and(
+        userId     ? ilike(contentAccessLogsTable.userId, `%${userId}%`)         : undefined,
+        resourceId ? eq(contentAccessLogsTable.resourceId, resourceId)           : undefined,
+        outcome    ? eq(contentAccessLogsTable.action, outcome)                  : undefined,
+        dateFrom   ? gte(contentAccessLogsTable.createdAt, new Date(dateFrom))   : undefined,
+        dateTo     ? lt(contentAccessLogsTable.createdAt, (() => { const d = new Date(dateTo); d.setDate(d.getDate() + 1); return d; })()) : undefined,
+      ));
+
+    res.json({ logs: rows, total: Number(total), page: pageNum, limit: limitNum });
+  } catch (error) {
+    logger.error({ error }, "access-logs query failed");
+    res.status(500).json({ error: "Could not load access logs" });
+  }
 });
 
 // ─── User import ──────────────────────────────────────────────────────────────

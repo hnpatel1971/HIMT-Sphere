@@ -78,7 +78,25 @@ export const learnerCourseAccess = pgTable("learner_course_access", {
   id:          text("id").primaryKey(),
   clerkUserId: text("clerk_user_id").notNull().references(() => learnerIdentities.clerkUserId, { onDelete: "cascade" }),
   courseId:    text("course_id").notNull(),
+  expiresAt:   timestamp("expires_at"),    // DRM-006: null = no expiry; set to restrict time-limited access
   createdAt:   timestamp("created_at").defaultNow().notNull(),
+});
+
+// ─── DRM access audit ─────────────────────────────────────────────────────────
+
+/** One row per protected content request — success or failure — for compliance audit. */
+export const contentAccessLogs = pgTable("content_access_logs", {
+  id:            text("id").primaryKey(),
+  userId:        text("user_id"),           // Clerk user ID; null for admin-session requests
+  resourceId:    text("resource_id").notNull(),
+  courseId:      text("course_id").notNull(),
+  /** view_attempt | view_success | view_denied | view_error */
+  action:        text("action").notNull(),
+  sessionId:     text("session_id"),
+  userAgent:     text("user_agent"),
+  ipAddress:     text("ip_address"),
+  outcomeDetail: text("outcome_detail"),
+  createdAt:     timestamp("created_at").defaultNow().notNull(),
 });
 
 // ─── Learner-facing courses ───────────────────────────────────────────────────

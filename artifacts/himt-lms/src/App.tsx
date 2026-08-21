@@ -65,7 +65,8 @@ const navItems = [
   { href: '/courses', label: 'Courses', icon: BookOpen },
 ];
 const adminItems = [
-  { href: '/users', label: 'Users & roles', icon: Users },
+  { href: '/users',        label: 'Users & roles', icon: Users },
+  { href: '/access-logs',  label: 'Access Logs',   icon: Eye   },
 ];
 
 function cx(...parts: Array<string | false | undefined>) { return parts.filter(Boolean).join(' '); }
@@ -4866,6 +4867,195 @@ function SettingsPage() {
   );
 }
 
+// ─── Access Logs Page ─────────────────────────────────────────────────────────
+type AccessLog = {
+  id: string; userId: string | null; resourceId: string; courseId: string;
+  action: string; sessionId: string | null; userAgent: string | null;
+  ipAddress: string | null; outcomeDetail: string | null; createdAt: string;
+  resourceTitle: string | null; resourceType: string | null; courseTitle: string | null;
+};
+type AccessLogsResponse = { logs: AccessLog[]; total: number; page: number; limit: number };
+
+const ACTION_LABELS: Record<string, { label: string; cls: string }> = {
+  view_success: { label: 'Success',  cls: 'bg-emerald-100 text-emerald-700' },
+  view_denied:  { label: 'Denied',   cls: 'bg-red-100 text-red-700' },
+  view_error:   { label: 'Error',    cls: 'bg-orange-100 text-orange-700' },
+  view_attempt: { label: 'Attempt',  cls: 'bg-gray-100 text-gray-600' },
+};
+
+function AccessLogsPage() {
+  const [userId,   setUserId]   = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo,   setDateTo]   = useState('');
+  const [outcome,  setOutcome]  = useState('');
+  const [page,     setPage]     = useState(1);
+  const [committed, setCommitted] = useState({ userId: '', dateFrom: '', dateTo: '', outcome: '' });
+
+  const [data,    setData]    = useState<AccessLogsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState('');
+
+  const load = useCallback((filters: typeof committed, pg: number) => {
+    setLoading(true); setError('');
+    const p = new URLSearchParams({ page: String(pg), limit: '50' });
+    if (filters.userId)   p.set('userId',   filters.userId);
+    if (filters.dateFrom) p.set('dateFrom', filters.dateFrom);
+    if (filters.dateTo)   p.set('dateTo',   filters.dateTo);
+    if (filters.outcome)  p.set('outcome',  filters.outcome);
+    apiFetch<AccessLogsResponse>(`/curriculum/access-logs?${p}`)
+      .then(d => { setData(d); setLoading(false); })
+      .catch(e => { setError(String(e)); setLoading(false); });
+  }, []);
+
+  useEffect(() => { load(committed, page); }, [load, committed, page]);
+
+  function applyFilters() {
+    const next = { userId, dateFrom, dateTo, outcome };
+    setCommitted(next); setPage(1);
+  }
+  function clearFilters() {
+    setUserId(''); setDateFrom(''); setDateTo(''); setOutcome('');
+    setCommitted({ userId: '', dateFrom: '', dateTo: '', outcome: '' }); setPage(1);
+  }
+
+  const totalPages = data ? Math.ceil(data.total / 50) : 1;
+  const inputCls = 'rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40';
+
+  return (
+    <div className="space-y-7">
+      <PageHeading eyebrow="Admin" title="Content Access Logs"
+        description="Every protected document and video request — success, denial, and error — logged for compliance audit (DRM-007)." />
+
+      {/* Filters */}
+      <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+          <div className="xl:col-span-2">
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">User ID</label>
+            <input value={userId} onChange={e => setUserId(e.target.value)}
+              placeholder="Clerk user ID or partial…" className={cx(inputCls, 'w-full')} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">From</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className={cx(inputCls, 'w-full')} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">To</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className={cx(inputCls, 'w-full')} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Outcome</label>
+            <select value={outcome} onChange={e => setOutcome(e.target.value)} className={cx(inputCls, 'w-full')}>
+              <option value="">All outcomes</option>
+              <option value="view_success">Success</option>
+              <option value="view_denied">Denied</option>
+              <option value="view_error">Error</option>
+              <option value="view_attempt">Attempt</option>
+            </select>
+          </div>
+        </div>
+        <div className="mt-4 flex gap-2">
+          <button onClick={applyFilters} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-sm hover:opacity-90">
+            <Filter size={14} /> Apply
+          </button>
+          <button onClick={clearFilters} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-bold text-foreground hover:bg-muted">
+            <X size={14} /> Clear
+          </button>
+          <button onClick={() => load(committed, page)} className="ml-auto inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm font-bold text-muted-foreground hover:bg-muted">
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <span className="text-sm font-semibold text-foreground">
+            {data ? `${data.total.toLocaleString()} log entries` : 'Loading…'}
+          </span>
+          {data && totalPages > 1 && (
+            <span className="text-xs text-muted-foreground">Page {page} of {totalPages}</span>
+          )}
+        </div>
+
+        {error && (
+          <div className="px-5 py-4 text-sm text-destructive flex items-center gap-2">
+            <CircleAlert size={16} /> {error}
+            <button onClick={() => load(committed, page)} className="ml-2 underline">Retry</button>
+          </div>
+        )}
+
+        {!error && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/30 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-3 whitespace-nowrap">Timestamp</th>
+                  <th className="px-4 py-3">Outcome</th>
+                  <th className="px-4 py-3">Resource</th>
+                  <th className="px-4 py-3">Course</th>
+                  <th className="px-4 py-3">User</th>
+                  <th className="px-4 py-3">IP</th>
+                  <th className="px-4 py-3">Detail</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {loading && !data?.logs.length && (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground"><RefreshCw size={18} className="inline animate-spin mr-2" />Loading…</td></tr>
+                )}
+                {!loading && data?.logs.length === 0 && (
+                  <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">No log entries match the current filters.</td></tr>
+                )}
+                {data?.logs.map(log => {
+                  const act = ACTION_LABELS[log.action] ?? { label: log.action, cls: 'bg-gray-100 text-gray-600' };
+                  const ts  = new Date(log.createdAt);
+                  const tsStr = `${ts.getDate().toString().padStart(2,'0')}/${(ts.getMonth()+1).toString().padStart(2,'0')}/${ts.getFullYear()} ${ts.getHours().toString().padStart(2,'0')}:${ts.getMinutes().toString().padStart(2,'0')}:${ts.getSeconds().toString().padStart(2,'0')}`;
+                  return (
+                    <tr key={log.id} className="hover:bg-muted/20 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{tsStr}</td>
+                      <td className="px-4 py-3">
+                        <span className={cx('inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider', act.cls)}>{act.label}</span>
+                      </td>
+                      <td className="px-4 py-3 max-w-[200px]">
+                        <p className="font-medium text-foreground truncate">{log.resourceTitle ?? log.resourceId}</p>
+                        {log.resourceType && <p className="text-[11px] text-muted-foreground">{log.resourceType}</p>}
+                      </td>
+                      <td className="px-4 py-3 max-w-[160px]">
+                        <p className="text-foreground truncate">{log.courseTitle ?? log.courseId}</p>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground max-w-[180px]">
+                        <p className="truncate" title={log.userId ?? 'admin-session'}>{log.userId ?? <span className="italic text-muted-foreground/60">admin</span>}</p>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{log.ipAddress ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground max-w-[200px]">
+                        <p className="truncate" title={log.outcomeDetail ?? ''}>{log.outcomeDetail ?? '—'}</p>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {data && totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 border-t border-border px-5 py-3">
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40">
+              ‹ Prev
+            </button>
+            <span className="text-sm text-muted-foreground">Page <strong className="text-foreground">{page}</strong> of {totalPages}</span>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40">
+              Next ›
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LearnerSignInPage() {
   const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
   return <div className="grid min-h-[100dvh] place-items-center bg-muted/40 px-4"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div>;
@@ -4874,7 +5064,7 @@ function LearnerSignUpPage() {
   const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
   return <div className="grid min-h-[100dvh] place-items-center bg-muted/40 px-4"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div>;
 }
-function AppRoutes() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/settings" component={SettingsPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId/subtopics/:subtopicId" component={SubTopicPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId" component={TopicWorkspacePage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+function AppRoutes() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/settings" component={SettingsPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId/subtopics/:subtopicId" component={SubTopicPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId" component={TopicWorkspacePage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route path="/access-logs" component={AccessLogsPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function AppRouter() { return <Switch><Route path="/sign-in/*?" component={LearnerSignInPage} /><Route path="/sign-up/*?" component={LearnerSignUpPage} /><Route component={AppRoutes} /></Switch>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
