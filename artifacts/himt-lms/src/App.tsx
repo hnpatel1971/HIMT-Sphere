@@ -1556,49 +1556,6 @@ function CurriculumCoursesPage() {
             </button>
             <button onClick={() => setShowImport(true)} className={btn}><FileUp size={13}/> Import</button>
 
-            {/* Divider */}
-            <div className="h-5 w-px bg-gray-200 mx-1" />
-
-            {/* TriByte: sync */}
-            <button
-              data-testid="button-sync-tribyte"
-              onClick={handleSyncTriByte}
-              disabled={syncing}
-              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', syncing && 'opacity-60 cursor-not-allowed')}>
-              <RefreshCw size={13} className={syncing ? 'animate-spin' : ''}/> {syncing ? 'Syncing…' : 'Sync from TriByte'}
-            </button>
-
-            {/* TriByte: import dropdown */}
-            <div className="relative" onClick={e => e.stopPropagation()}>
-              <button
-                onClick={() => setTbImportMenu(m => !m)}
-                className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5')}>
-                <Download size={13}/> TriByte Import <ChevronDown size={11} className={cx('transition-transform', tbImportMenu && 'rotate-180')}/>
-              </button>
-              {tbImportMenu && (
-                <div className="absolute right-0 top-full z-20 mt-1 w-60 rounded-xl border border-gray-200 bg-white py-1.5 shadow-lg">
-                  <button
-                    data-testid="button-import-all-structures"
-                    onClick={() => { openBulkImport(); setTbImportMenu(false); }}
-                    disabled={bulkJob ? ['queued', 'running'].includes(bulkJob.status) : false}
-                    className="flex w-full items-center gap-2.5 px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
-                    <Layers size={13}/> Import all structures
-                  </button>
-                  <button
-                    data-testid="button-import-learning-resources"
-                    onClick={() => { openResourceImport(); setTbImportMenu(false); }}
-                    disabled={startingResourceImport || (resourceJob ? ['queued', 'running'].includes(resourceJob.status) : false)}
-                    className="flex w-full items-center gap-2.5 px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
-                    <Download size={13}/> {startingResourceImport ? 'Starting…' : 'Import learning resources'}
-                  </button>
-                  <div className="mx-3 mt-1.5 border-t border-gray-100 pt-1.5 pb-0.5">
-                    <span className="text-[10px] font-medium text-gray-400" data-testid="text-last-synced">
-                      Last synced: {formatSyncDate(lastSyncedAt)}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
