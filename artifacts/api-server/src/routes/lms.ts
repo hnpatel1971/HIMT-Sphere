@@ -3333,6 +3333,99 @@ router.post("/users/sync-tribyte", requireAdmin, async (_req, res) => {
   }
 });
 
+// ─── Retry unavailable resources ─────────────────────────────────────────────
+// Re-downloads every resource whose status is 'unavailable' (i.e. the initial
+// import captured the source URL but could not fetch the file, usually because
+// the TriByte clipping endpoint required an authenticated session at that time).
+
+router.post("/curriculum/retry-unavailable", async (req, res) => {
+  if (!req.session?.isAdmin) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  const unavailable = await db.select().from(courseResourcesTable)
+    .where(eq(courseResourcesTable.status, "unavailable"));
+
+  if (unavailable.length === 0) {
+    res.json({ tried: 0, fixed: 0, failed: 0, details: [] });
+    return;
+  }
+
+  let session: { cookie: string; strategy: string };
+  try {
+    session = await resolveTriByteCookie();
+  } catch (err) {
+    res.status(502).json({ error: `Cannot authenticate to TriByte: ${String(err)}` });
+    return;
+  }
+
+  const details: { id: string; title: string; result: string; error?: string }[] = [];
+  let fixed = 0;
+  let failed = 0;
+
+  for (const row of unavailable) {
+    const objectPath = resourceObjectPath(
+      `${row.courseId}/${row.id.slice(3)}/${row.fileName || "resource"}`,
+    );
+
+    // If a previous interrupted download already stored the object, mark ready without re-fetching.
+    const alreadyStored = await inspectStoredResource(objectPath, getStoredResource);
+    if (alreadyStored) {
+      await db.update(courseResourcesTable).set({
+        status: "ready",
+        storagePath: objectPath,
+        mimeType: resourceMimeFromName(row.fileName ?? "", alreadyStored.contentType),
+        sizeBytes: alreadyStored.sizeBytes,
+        error: null,
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, row.id));
+      details.push({ id: row.id, title: row.title ?? "", result: "recovered-from-storage" });
+      fixed++;
+      continue;
+    }
+
+    if (!row.sourceUrl) {
+      details.push({ id: row.id, title: row.title ?? "", result: "failed", error: "No source URL" });
+      failed++;
+      continue;
+    }
+
+    try {
+      const response = await fetchApprovedResource(row.sourceUrl, session);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.body) throw new Error("No response body");
+      const contentType = response.headers.get("content-type")?.split(";")[0] ?? "";
+      if (contentType.includes("text/html")) throw new Error("Source returned HTML, not a file");
+
+      const stored = await storeResourceStream(
+        objectPath,
+        response.body,
+        resourceMimeFromName(row.fileName ?? "", contentType),
+      );
+      await db.update(courseResourcesTable).set({
+        status: "ready",
+        storagePath: objectPath,
+        mimeType: resourceMimeFromName(row.fileName ?? "", contentType),
+        sizeBytes: stored.sizeBytes,
+        checksum: stored.checksum,
+        error: null,
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, row.id));
+      details.push({ id: row.id, title: row.title ?? "", result: "downloaded" });
+      fixed++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await db.update(courseResourcesTable).set({
+        status: "failed",
+        error: msg,
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, row.id));
+      details.push({ id: row.id, title: row.title ?? "", result: "failed", error: msg });
+      failed++;
+    }
+  }
+
+  res.json({ tried: unavailable.length, fixed, failed, details });
+});
+
 // ─── User import ──────────────────────────────────────────────────────────────
 
 router.post("/users/import", async (req, res) => {
