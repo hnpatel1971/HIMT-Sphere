@@ -248,6 +248,30 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
     };
   }, [resource.openUrl, needsBlob]);
 
+  // ── DRM: block print / save shortcuts and blank the page on @media print ──
+  useEffect(() => {
+    const blockShortcuts = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl && (e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    // Capture phase so it intercepts before the browser's native handler
+    window.addEventListener('keydown', blockShortcuts, true);
+
+    // Inject @media print rule while the modal is mounted
+    const style = document.createElement('style');
+    style.setAttribute('data-noprint', '');
+    style.textContent = '@media print { body * { visibility: hidden !important; display: none !important; } }';
+    document.head.appendChild(style);
+
+    return () => {
+      window.removeEventListener('keydown', blockShortcuts, true);
+      style.remove();
+    };
+  }, []);
+
   let viewer: ReactNode;
   if (ytId) {
     viewer = (
@@ -284,7 +308,17 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       </div>
     );
   } else if (blobUrl && resource.type === 'Video') {
-    viewer = <video controls autoPlay className="h-full w-full bg-black" src={blobUrl} />;
+    viewer = (
+      <video
+        controls
+        autoPlay
+        controlsList="nodownload nofullscreen"
+        disablePictureInPicture
+        onContextMenu={e => e.preventDefault()}
+        className="h-full w-full bg-black"
+        src={blobUrl}
+      />
+    );
   } else if (blobUrl) {
     viewer = <iframe src={blobUrl} className="h-full w-full border-0 bg-white" />;
   } else {
@@ -292,7 +326,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-black/95" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-[60] flex flex-col bg-black/95" onContextMenu={e => e.preventDefault()} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       {/* Top bar */}
       <div className="flex shrink-0 items-center justify-between gap-4 bg-gray-900 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2.5">
