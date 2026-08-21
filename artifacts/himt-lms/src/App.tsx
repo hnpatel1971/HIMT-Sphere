@@ -3615,7 +3615,7 @@ function CurriculumGroupsPage() {
       <div className="p-8 lg:p-10 space-y-5">
         {/* Back link */}
         <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
-          <ChevronLeft size={18} /> Show all Groups
+          <ChevronLeft size={18} /> Curriculum
         </Link>
 
         {/* Toolbar */}
