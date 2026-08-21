@@ -1541,8 +1541,8 @@ async function resolveTriByteCookie(): Promise<{ cookie: string; strategy: strin
   } catch { /* DB query or login failed — fall through */ }
 
   // 4. Env var username/password
-  const tbUser = process.env.TRIBYTE_USERNAME;
-  const tbPass = process.env.TRIBYTE_PASSWORD;
+  const tbUser = process.env.TRIBYTE_USERNAME?.trim();
+  const tbPass = process.env.TRIBYTE_PASSWORD?.trim();
   if (tbUser && tbPass) {
     const cookie = await loginToTriByteShared(tbUser, tbPass);
     tbSessionCache = { cookie, expiresAt: Date.now() + TB_SESSION_TTL_MS, strategy: "TRIBYTE_USERNAME/PASSWORD" };
@@ -2833,7 +2833,16 @@ router.post("/curriculum/resource-imports/:jobId/retry", requireAdmin, async (re
 });
 
 // Admin-only resource preview — no enrollment check, just admin auth
-router.get("/curriculum/resources/:resourceId/admin-view", requireAdmin, async (req, res) => {
+// Resource preview — accepts admin session OR any signed-in Clerk user.
+// Ready resources are approved content; any authenticated user (admin or learner)
+// may view them. Unauthenticated requests are rejected.
+router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
+  const isAdminUser = req.session.isAdmin === true;
+  const clerkUserId = getAuth(req).userId;
+  if (!isAdminUser && !clerkUserId) {
+    res.status(401).json({ error: "Sign in to preview this resource" });
+    return;
+  }
   try {
     const resourceId = String(req.params.resourceId);
     const [resource] = await db.select().from(courseResourcesTable)
@@ -2858,7 +2867,7 @@ router.get("/curriculum/resources/:resourceId/admin-view", requireAdmin, async (
     res.setHeader("Cache-Control", "private, max-age=3600");
     file.createReadStream().pipe(res);
   } catch (error) {
-    logger.error({ error }, "Could not serve admin resource preview");
+    logger.error({ error }, "Could not serve resource preview");
     res.status(500).json({ error: "Could not open resource" });
   }
 });
