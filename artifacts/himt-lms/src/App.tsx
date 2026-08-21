@@ -30,7 +30,7 @@ import { shadcn } from '@clerk/themes';
 import { Link, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import {
   Activity, Archive, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
-  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, Eye, FileSearch, FileText, FileUp, Filter, GraduationCap,
+  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileSearch, FileText, FileUp, Filter, GraduationCap,
   GripVertical, Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
   MinusCircle, Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
@@ -1984,7 +1984,7 @@ function SubTopicsPanel({
 
 // ─── CourseStructurePage — internal topics view for a curriculum course ──────
 
-type CourseTopicActivity = { id: string; title: string; type: string; status: string; order: number };
+type CourseTopicActivity = { id: string; title: string; type: string; status: string; order: number; openUrl?: string | null };
 type CourseTopicSubtopic = { id: string; topicId: string; courseId: string; nid: string; name: string; order: number; activities: CourseTopicActivity[] };
 type CourseTopic = {
   id: string; courseId: string; nid: string; tid: string;
@@ -2928,13 +2928,31 @@ function SubTopicPage() {
                     : a.status === 'unavailable'
                     ? 'text-red-500 bg-red-50'
                     : 'text-amber-600 bg-amber-50';
+                  const canOpen = Boolean(a.openUrl);
                   return (
-                    <li key={a.id} className="flex items-center gap-4 px-5 py-3.5">
-                      <span className="w-6 shrink-0 text-center text-xs font-medium text-gray-400">{idx + 1}</span>
-                      {icon}
-                      <span className="flex-1 text-sm text-gray-700">{a.title}</span>
-                      <span className="text-[10px] font-semibold uppercase text-gray-400 bg-gray-100 px-2 py-0.5 rounded shrink-0">{a.type || '—'}</span>
-                      <span className={cx('text-[10px] font-semibold capitalize px-2 py-0.5 rounded shrink-0', statusCx)}>{a.status}</span>
+                    <li key={a.id}>
+                      {canOpen ? (
+                        <button
+                          type="button"
+                          onClick={() => window.open(a.openUrl!, '_blank', 'noopener,noreferrer')}
+                          className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-gray-50 cursor-pointer transition-colors group"
+                        >
+                          <span className="w-6 shrink-0 text-center text-xs font-medium text-gray-400">{idx + 1}</span>
+                          {icon}
+                          <span className="flex-1 text-sm text-gray-700 group-hover:text-primary transition-colors">{a.title}</span>
+                          <span className="text-[10px] font-semibold uppercase text-gray-400 bg-gray-100 px-2 py-0.5 rounded shrink-0">{a.type || '—'}</span>
+                          <span className={cx('text-[10px] font-semibold capitalize px-2 py-0.5 rounded shrink-0', statusCx)}>{a.status}</span>
+                          <ExternalLink size={13} className="shrink-0 text-gray-300 group-hover:text-primary transition-colors"/>
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-4 px-5 py-3.5">
+                          <span className="w-6 shrink-0 text-center text-xs font-medium text-gray-400">{idx + 1}</span>
+                          {icon}
+                          <span className="flex-1 text-sm text-gray-700">{a.title}</span>
+                          <span className="text-[10px] font-semibold uppercase text-gray-400 bg-gray-100 px-2 py-0.5 rounded shrink-0">{a.type || '—'}</span>
+                          <span className={cx('text-[10px] font-semibold capitalize px-2 py-0.5 rounded shrink-0', statusCx)}>{a.status}</span>
+                        </div>
+                      )}
                     </li>
                   );
                 })}

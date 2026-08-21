@@ -1004,12 +1004,17 @@ router.get("/curriculum/courses/:id/topics", async (req, res) => {
     const resources = await db.select({
       id: courseResourcesTable.id,
       subtopicId: courseResourcesTable.subtopicId,
+      topicId: courseResourcesTable.topicId,
       title: courseResourcesTable.title,
       type: courseResourcesTable.resourceType,
       status: courseResourcesTable.status,
       order: courseResourcesTable.order,
     }).from(courseResourcesTable)
       .where(eq(courseResourcesTable.courseId, req.params.id));
+    const toActivity = (r: typeof resources[number]) => ({
+      ...r,
+      openUrl: r.status === "ready" ? `/api/curriculum/resources/${r.id}/admin-view` : null,
+    });
     const result = topics.map(t => ({
       ...t,
       subtopics: subtopics
@@ -1019,7 +1024,8 @@ router.get("/curriculum/courses/:id/topics", async (req, res) => {
           ...s,
           activities: resources
             .filter(r => r.subtopicId === s.id)
-            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .map(toActivity),
         })),
     }));
     res.json(result);
@@ -2823,6 +2829,37 @@ router.post("/curriculum/resource-imports/:jobId/retry", requireAdmin, async (re
     res.status(202).json({ job: await getResourceImportJob(jobId) });
   } catch {
     res.status(500).json({ error: "Could not retry unfinished resource imports" });
+  }
+});
+
+// Admin-only resource preview — no enrollment check, just admin auth
+router.get("/curriculum/resources/:resourceId/admin-view", requireAdmin, async (req, res) => {
+  try {
+    const resourceId = String(req.params.resourceId);
+    const [resource] = await db.select().from(courseResourcesTable)
+      .where(eq(courseResourcesTable.id, resourceId));
+    if (!resource) {
+      res.status(404).json({ error: "Resource not found" });
+      return;
+    }
+    if (!resource.storagePath) {
+      if (!resource.sourceUrl) {
+        res.status(404).json({ error: "Resource has no content" });
+        return;
+      }
+      res.redirect(302, resource.sourceUrl);
+      return;
+    }
+    const file = await getStoredResource(resource.storagePath);
+    const [metadata] = await file.getMetadata();
+    res.setHeader("Content-Type", String(metadata.contentType ?? resource.mimeType ?? "application/octet-stream"));
+    res.setHeader("Content-Disposition", `inline; filename="${(resource.fileName || resource.title).replace(/"/g, "")}"`);
+    if (metadata.size) res.setHeader("Content-Length", String(metadata.size));
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    file.createReadStream().pipe(res);
+  } catch (error) {
+    logger.error({ error }, "Could not serve admin resource preview");
+    res.status(500).json({ error: "Could not open resource" });
   }
 });
 
