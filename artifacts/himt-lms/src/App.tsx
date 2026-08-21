@@ -236,6 +236,9 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
   // exposed in the DOM and cannot be copied and opened in a new tab.
   const needsBlob = !ytId && !vimId && !isPublitas;
 
+  // Ref used to forward scroll events from the overlay into the PDF iframe
+  const docIframeRef = useRef<HTMLIFrameElement>(null);
+
   const [blobUrl,    setBlobUrl]    = useState<string | null>(null);
   const [fetchState, setFetchState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [fetchErr,   setFetchErr]   = useState('');
@@ -275,6 +278,11 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
     // Capture phase so it intercepts before the browser's native handler
     window.addEventListener('keydown', blockShortcuts, true);
 
+    // If focus escapes into the PDF iframe, pull it back immediately so
+    // the keydown listener above stays effective
+    const refocusOnBlur = () => { window.focus(); };
+    window.addEventListener('blur', refocusOnBlur);
+
     // Inject @media print rule while the modal is mounted
     const style = document.createElement('style');
     style.setAttribute('data-noprint', '');
@@ -283,6 +291,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
 
     return () => {
       window.removeEventListener('keydown', blockShortcuts, true);
+      window.removeEventListener('blur', refocusOnBlur);
       style.remove();
     };
   }, []);
@@ -335,7 +344,29 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       />
     );
   } else if (blobUrl) {
-    viewer = <iframe src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0`} className="h-full w-full border-0 bg-white" />;
+    viewer = (
+      <div className="relative h-full w-full">
+        <iframe
+          ref={docIframeRef}
+          src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+          className="h-full w-full border-0 bg-white"
+          tabIndex={-1}
+        />
+        {/* Transparent overlay — intercepts all pointer events so the browser's
+            native PDF toolbar (print/save/settings) can never be clicked, and
+            focus never moves into the iframe (keeping our keydown listener live).
+            Wheel events are forwarded into the iframe so the document scrolls normally. */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 z-[5] cursor-default"
+          onContextMenu={e => e.preventDefault()}
+          onMouseDown={e => e.preventDefault()}
+          onWheel={e => {
+            docIframeRef.current?.contentWindow?.scrollBy({ top: e.deltaY, left: e.deltaX, behavior: 'auto' });
+          }}
+        />
+      </div>
+    );
   } else {
     viewer = null;
   }
