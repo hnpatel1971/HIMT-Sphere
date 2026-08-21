@@ -37,6 +37,7 @@ import {
   faqCategories as faqTable,
   appSettings as appSettingsTable,
   contentAccessLogs as contentAccessLogsTable,
+  contentTokens as contentTokensTable,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import {
@@ -2926,6 +2927,106 @@ router.post("/curriculum/resource-imports/:jobId/retry", requireAdmin, async (re
   }
 });
 
+// ─── DRM-003: content tokens ─────────────────────────────────────────────────
+
+/**
+ * Ensure the content_tokens table exists.
+ * Called at startup alongside ensureAppSettingsTable and ensureAccessLogsTable.
+ * Also starts a periodic cleanup job that prunes already-expired tokens.
+ */
+export async function ensureContentTokensTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_tokens (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT,
+      session_id  TEXT NOT NULL,
+      resource_id TEXT NOT NULL,
+      expires_at  TIMESTAMPTZ NOT NULL,
+      used_at     TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  // Clean up tokens that expired more than 60 s ago every 5 minutes.
+  // Keeps the table small without disrupting any in-flight request.
+  const cleanup = async () => {
+    try {
+      await pool.query(`DELETE FROM content_tokens WHERE expires_at < NOW() - INTERVAL '60 seconds'`);
+    } catch (err) { logger.warn({ err }, "content_token cleanup failed"); }
+  };
+  setInterval(() => { void cleanup(); }, 5 * 60 * 1000);
+}
+
+/** Extract bearer token from Authorization header, with fallback to ?token= query param (for iframes). */
+function extractBearerToken(req: import("express").Request): string | undefined {
+  const auth = req.headers.authorization;
+  if (auth?.startsWith("Bearer ")) {
+    const t = auth.slice(7).trim();
+    if (t) return t;
+  }
+  const q = req.query["token"];
+  return typeof q === "string" && q ? q : undefined;
+}
+
+/**
+ * Verify a one-time content token and, on success, atomically mark it used.
+ * Checks: existence, resource match, expiry, one-time-use, session binding.
+ */
+async function verifyAndConsumeToken(
+  token: string | undefined,
+  resourceId: string,
+  req: import("express").Request,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  if (!token) return { ok: false, status: 403, error: "Content token required — POST /curriculum/resources/:id/token first" };
+  const [row] = await db.select().from(contentTokensTable).where(eq(contentTokensTable.id, token));
+  if (!row)                          return { ok: false, status: 403, error: "Content token is invalid" };
+  if (row.resourceId !== resourceId) return { ok: false, status: 403, error: "Content token is not valid for this resource" };
+  if (row.usedAt)                    return { ok: false, status: 403, error: "Content token has already been used" };
+  if (new Date() > row.expiresAt)    return { ok: false, status: 403, error: "Content token has expired" };
+  // Session binding — admin: Express session ID; learner: Clerk session ID
+  const isAdminCaller    = req.session.isAdmin === true;
+  const currentSession   = isAdminCaller
+    ? (req.sessionID ?? "")
+    : (getAuth(req).sessionId ?? req.sessionID ?? "");
+  if (row.sessionId !== currentSession) return { ok: false, status: 403, error: "Content token session mismatch" };
+  // Atomically mark as used to prevent replay
+  await db.update(contentTokensTable).set({ usedAt: new Date() }).where(eq(contentTokensTable.id, token));
+  return { ok: true };
+}
+
+/**
+ * POST /curriculum/resources/:resourceId/token
+ * DRM-003: Issues a short-lived (60 s), one-time-use content token tied to
+ * userId + sessionId + resourceId. Admin session or enrolled Clerk learner required.
+ */
+router.post("/curriculum/resources/:resourceId/token", async (req, res) => {
+  const isAdminUser = req.session.isAdmin === true;
+  const clerkAuth   = getAuth(req);
+  if (!isAdminUser && !clerkAuth.userId) {
+    res.status(401).json({ error: "Sign in to request a content token" }); return;
+  }
+  const resourceId = String(req.params.resourceId);
+  // Learners must be enrolled in the course that owns this resource
+  if (!isAdminUser) {
+    const [resource] = await db
+      .select({ courseId: courseResourcesTable.courseId, status: courseResourcesTable.status })
+      .from(courseResourcesTable)
+      .where(eq(courseResourcesTable.id, resourceId));
+    if (!resource || resource.status !== "ready") {
+      res.status(404).json({ error: "Resource not found" }); return;
+    }
+    if (!(await learnerCanAccessCourse(req, resource.courseId))) {
+      res.status(403).json({ error: "Not enrolled in this course" }); return;
+    }
+  }
+  const sessionId = isAdminUser
+    ? (req.sessionID ?? "admin-session")
+    : (clerkAuth.sessionId ?? req.sessionID ?? "clerk-session");
+  const token     = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + 60_000);
+  await db.insert(contentTokensTable).values({ id: token, userId: clerkAuth.userId ?? null, sessionId, resourceId, expiresAt });
+  res.json({ token, expiresAt: expiresAt.toISOString() });
+});
+
 // Admin-only resource preview — no enrollment check, just admin auth
 // Resource preview — accepts admin session OR any signed-in Clerk user.
 // Ready resources are approved content; any authenticated user (admin or learner)
@@ -2945,6 +3046,14 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
     await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: "unauthenticated" });
     res.status(401).json({ error: "Sign in to preview this resource" });
     return;
+  }
+  // DRM-003: verify and consume one-time content token before any content is delivered
+  {
+    const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), String(req.params.resourceId), req);
+    if (!tokenResult.ok) {
+      await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: `token:${tokenResult.error}` });
+      res.status(tokenResult.status).json({ error: tokenResult.error }); return;
+    }
   }
   try {
     const resourceId = String(req.params.resourceId);
@@ -3016,6 +3125,14 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
   if ((fetchMode === "navigate" || fetchMode === "nested-navigate") && fetchDest !== "iframe") {
     res.status(403).json({ error: "This resource can only be viewed inside the application." });
     return;
+  }
+  // DRM-003: verify and consume one-time content token before any DB or content work
+  {
+    const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), String(req.params.resourceId), req);
+    if (!tokenResult.ok) {
+      await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: `token:${tokenResult.error}` });
+      res.status(tokenResult.status).json({ error: tokenResult.error }); return;
+    }
   }
   try {
     const resourceId = String(req.params.resourceId);
@@ -3167,6 +3284,14 @@ router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req
     await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: "admin_session_required" });
     res.status(403).json({ error: "Admin access required" }); return;
   }
+  // DRM-003: verify and consume one-time content token
+  {
+    const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), String(req.params.resourceId), req);
+    if (!tokenResult.ok) {
+      await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: `token:${tokenResult.error}` });
+      res.status(tokenResult.status).json({ error: tokenResult.error }); return;
+    }
+  }
   try {
     const [resource] = await db.select().from(courseResourcesTable)
       .where(eq(courseResourcesTable.id, req.params.resourceId));
@@ -3211,6 +3336,14 @@ router.get("/curriculum/resources/:resourceId/admin-view/page/:pageNum", async (
   if (!Number.isFinite(pageNum) || pageNum < 1) {
     res.status(400).json({ error: "Invalid page number" }); return;
   }
+  // DRM-003: verify and consume one-time content token
+  {
+    const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), String(req.params.resourceId), req);
+    if (!tokenResult.ok) {
+      await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: `token:${tokenResult.error}` });
+      res.status(tokenResult.status).json({ error: tokenResult.error }); return;
+    }
+  }
   try {
     const [resource] = await db.select().from(courseResourcesTable)
       .where(eq(courseResourcesTable.id, req.params.resourceId));
@@ -3246,6 +3379,14 @@ router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res)
   const fetchMode = req.headers["sec-fetch-mode"];
   if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
     res.status(403).json({ error: "This resource can only be viewed inside the application." }); return;
+  }
+  // DRM-003: verify and consume one-time content token
+  {
+    const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), String(req.params.resourceId), req);
+    if (!tokenResult.ok) {
+      await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: `token:${tokenResult.error}` });
+      res.status(tokenResult.status).json({ error: tokenResult.error }); return;
+    }
   }
   try {
     const [resource] = await db.select().from(courseResourcesTable)
@@ -3306,6 +3447,14 @@ router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, r
   const pageNum = parseInt(req.params.pageNum, 10);
   if (!Number.isFinite(pageNum) || pageNum < 1) {
     res.status(400).json({ error: "Invalid page number" }); return;
+  }
+  // DRM-003: verify and consume one-time content token
+  {
+    const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), String(req.params.resourceId), req);
+    if (!tokenResult.ok) {
+      await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: `token:${tokenResult.error}` });
+      res.status(tokenResult.status).json({ error: tokenResult.error }); return;
+    }
   }
   try {
     const [resource] = await db.select().from(courseResourcesTable)

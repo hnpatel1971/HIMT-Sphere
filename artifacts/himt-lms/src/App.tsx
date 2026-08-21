@@ -11,6 +11,36 @@ async function apiFetch<T = unknown>(path: string, method = 'GET', body?: unknow
   if (!r.ok) throw new Error(await r.text());
   return r.json() as Promise<T>;
 }
+// ── DRM-003: per-request content token helpers ────────────────────────────────
+/** Issue a one-time 60 s content token for the given resource from the server. */
+async function issueContentToken(resourceId: string): Promise<string> {
+  const result = await apiFetch<{ token: string }>(
+    `/curriculum/resources/${resourceId}/token`, 'POST',
+  );
+  return result.token;
+}
+/**
+ * Fetch a DRM-protected endpoint with a fresh one-time token in the Authorization header.
+ * Retries once on 403 in the rare case of a token race (two concurrent fetches).
+ */
+async function fetchWithContentToken(
+  url: string,
+  resourceId: string,
+  opts?: RequestInit,
+): Promise<Response> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await issueContentToken(resourceId);
+    const r = await fetch(url, {
+      ...opts,
+      credentials: 'include',
+      headers: { ...(opts?.headers as Record<string, string> ?? {}), Authorization: `Bearer ${token}` },
+    });
+    if (r.ok || r.status !== 403 || attempt === 1) return r;
+    // 403 on first attempt → possibly token race; retry with a fresh token
+  }
+  throw new Error('Protected content fetch failed after retry');
+}
+
 function useApi<T>(path: string, deps: unknown[] = []) {
   const [data,    setData]    = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
@@ -248,20 +278,35 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
   const [pageImgUrl, setPageImgUrl]   = useState<string | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError,   setPageError]   = useState('');
+  // DRM-003: separate one-time token for the Publitas iframe src (issued after page-count response)
+  const [publitasToken, setPublitasToken] = useState<string | null>(null);
 
   const base = resource.openUrl; // e.g. /api/curriculum/resources/:id/admin-view
 
-  // 1. Fetch page count on mount
+  // 1. Fetch page count — DRM-003: fresh one-time token per request
   useEffect(() => {
-    fetch(`${base}/page-count`, { credentials: 'include' })
+    let cancelled = false;
+    fetchWithContentToken(`${base}/page-count`, resource.id)
       .then(r => r.json())
       .then((d: { pageCount: number | null; isPdf: boolean; externalViewer?: string }) => {
+        if (cancelled) return;
         setIsPdf(d.isPdf);
         setPageCount(d.pageCount);
         setExternalViewer(d.externalViewer ?? null);
       })
-      .catch(() => setIsPdf(false));
-  }, [base]);
+      .catch(() => { if (!cancelled) setIsPdf(false); });
+    return () => { cancelled = true; };
+  }, [base, resource.id]);
+
+  // 1b. When Publitas is detected, issue a fresh token for the iframe src URL
+  useEffect(() => {
+    if (externalViewer !== 'publitas') return;
+    let cancelled = false;
+    issueContentToken(resource.id)
+      .then(t => { if (!cancelled) setPublitasToken(t); })
+      .catch(() => { if (!cancelled) setPublitasToken(null); });
+    return () => { cancelled = true; };
+  }, [externalViewer, resource.id]);
 
   // 2. Fetch each page image (blob URL so no raw endpoint URL in the DOM)
   useEffect(() => {
@@ -269,7 +314,7 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
     let cancelled = false;
     setPageLoading(true);
     setPageError('');
-    fetch(`${base}/page/${currentPage}`, { credentials: 'include' })
+    fetchWithContentToken(`${base}/page/${currentPage}`, resource.id)
       .then(async r => {
         if (!r.ok) throw new Error(`Server returned ${r.status}`);
         const blob = await r.blob();
@@ -280,7 +325,7 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
       })
       .catch(e => { if (!cancelled) { setPageError(String(e)); setPageLoading(false); } });
     return () => { cancelled = true; };
-  }, [base, currentPage, isPdf, pageCount]);
+  }, [base, currentPage, isPdf, pageCount, resource.id]);
 
   // 3. Revoke final blob URL on unmount
   useEffect(() => () => { setPageImgUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; }); }, []);
@@ -296,15 +341,24 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
     // Publitas web publication: embed via the server-side redirect endpoint.
     // The Publitas URL is never exposed in client-side JavaScript — the browser
     // follows a 302 from /open or /admin-view with only enrollment-gated access.
-    if (externalViewer === 'publitas') return (
-      <iframe
-        src={resource.openUrl}
-        allowFullScreen
-        className="h-full w-full border-0"
-        title={resource.title}
-        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-      />
-    );
+    if (externalViewer === 'publitas') {
+      // Wait for the per-iframe one-time token before setting the src (DRM-003)
+      if (!publitasToken) return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400">
+          <RefreshCw size={28} className="animate-spin text-primary" />
+          <span className="text-sm">Loading publication…</span>
+        </div>
+      );
+      return (
+        <iframe
+          src={`${resource.openUrl}?token=${publitasToken}`}
+          allowFullScreen
+          className="h-full w-full border-0"
+          title={resource.title}
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+        />
+      );
+    }
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400">
         <FileText size={28} className="text-amber-400" />
@@ -390,7 +444,8 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
     setFetchState('loading');
     setFetchErr('');
     setBlobUrl(null);
-    fetch(resource.openUrl, { credentials: 'include' })
+    // DRM-003: fetch with a fresh one-time token in the Authorization header
+    fetchWithContentToken(resource.openUrl, resource.id)
       .then(async r => {
         if (!r.ok) throw new Error(`Server returned ${r.status}`);
         const blob = await r.blob();
@@ -405,7 +460,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       cancelled = true;
       setBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
     };
-  }, [resource.openUrl, needsBlob]);
+  }, [resource.openUrl, resource.id, needsBlob]);
 
   // ── DRM: block print / save shortcuts and blank the page on @media print ──
   useEffect(() => {

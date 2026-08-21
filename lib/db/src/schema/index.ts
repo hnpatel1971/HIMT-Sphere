@@ -99,6 +99,22 @@ export const contentAccessLogs = pgTable("content_access_logs", {
   createdAt:     timestamp("created_at").defaultNow().notNull(),
 });
 
+// ─── DRM content tokens ───────────────────────────────────────────────────────
+
+/**
+ * Short-lived (60 s), one-time-use tokens that gate every protected content request (DRM-003).
+ * Issued by POST /curriculum/resources/:id/token; consumed on first delivery endpoint call.
+ */
+export const contentTokens = pgTable("content_tokens", {
+  id:         text("id").primaryKey(),         // crypto-random hex (64 chars)
+  userId:     text("user_id"),                  // Clerk user ID; null for admin-session callers
+  sessionId:  text("session_id").notNull(),     // bound to the session that issued the token
+  resourceId: text("resource_id").notNull(),
+  expiresAt:  timestamp("expires_at").notNull(),
+  usedAt:     timestamp("used_at"),             // null until consumed; never reusable after set
+  createdAt:  timestamp("created_at").defaultNow().notNull(),
+});
+
 // ─── Learner-facing courses ───────────────────────────────────────────────────
 
 export const courses = pgTable("courses", {
