@@ -212,7 +212,22 @@ function getVimeoId(url: string): string | null {
   return m?.[1] ?? null;
 }
 
+function useWatermarkUrl(): string {
+  const { user } = useUser();
+  const label = user?.fullName ?? user?.primaryEmailAddress?.emailAddress ?? 'Confidential';
+  const date  = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const text  = `${label}  ·  ${date}`;
+  // Build a repeating-tile SVG and convert to a data URL
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="340" height="160">
+    <text x="170" y="80" text-anchor="middle" dominant-baseline="middle"
+      font-family="system-ui,sans-serif" font-size="13" font-weight="600"
+      fill="rgba(255,255,255,0.18)" transform="rotate(-30,170,80)">${text}</text>
+  </svg>`;
+  return `url("data:image/svg+xml;base64,${btoa(svg)}")`;
+}
+
 function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource; onClose: () => void }) {
+  const watermarkUrl = useWatermarkUrl();
   const src = resource.sourceUrl ?? '';
   const ytId      = src ? getYouTubeId(src) : null;
   const vimId     = src ? getVimeoId(src) : null;
@@ -347,8 +362,14 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
         </button>
       </div>
       {/* Viewer */}
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
         {viewer}
+        {/* Watermark — pointer-events:none so it never blocks interaction */}
+        <div
+          aria-hidden="true"
+          style={{ backgroundImage: watermarkUrl, backgroundRepeat: 'repeat', pointerEvents: 'none' }}
+          className="absolute inset-0 z-10"
+        />
       </div>
     </div>
   );
