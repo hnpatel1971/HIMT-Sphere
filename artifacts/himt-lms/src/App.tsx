@@ -219,9 +219,39 @@ function getVimeoId(url: string): string | null {
 
 function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource; onClose: () => void }) {
   const src = resource.sourceUrl ?? '';
-  const ytId   = src ? getYouTubeId(src) : null;
-  const vimId  = src ? getVimeoId(src) : null;
+  const ytId      = src ? getYouTubeId(src) : null;
+  const vimId     = src ? getVimeoId(src) : null;
   const isPublitas = src.includes('view.publitas.com');
+  // Stored files are fetched as blob URLs so the raw endpoint URL is never
+  // exposed in the DOM and cannot be copied and opened in a new tab.
+  const needsBlob = !ytId && !vimId && !isPublitas;
+
+  const [blobUrl,    setBlobUrl]    = useState<string | null>(null);
+  const [fetchState, setFetchState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [fetchErr,   setFetchErr]   = useState('');
+
+  useEffect(() => {
+    if (!needsBlob) { setFetchState('ready'); return; }
+    let cancelled = false;
+    setFetchState('loading');
+    setFetchErr('');
+    setBlobUrl(null);
+    fetch(resource.openUrl, { credentials: 'include' })
+      .then(async r => {
+        if (!r.ok) throw new Error(`Server returned ${r.status}`);
+        const blob = await r.blob();
+        if (cancelled) return;
+        setBlobUrl(URL.createObjectURL(blob));
+        setFetchState('ready');
+      })
+      .catch(e => {
+        if (!cancelled) { setFetchErr(String(e)); setFetchState('error'); }
+      });
+    return () => {
+      cancelled = true;
+      setBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    };
+  }, [resource.openUrl, needsBlob]);
 
   let viewer: ReactNode;
   if (ytId) {
@@ -244,19 +274,26 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
     );
   } else if (isPublitas) {
     viewer = <iframe src={src} allowFullScreen className="h-full w-full border-0" />;
-  } else if (resource.type === 'Video') {
+  } else if (fetchState === 'loading') {
     viewer = (
-      <video
-        controls
-        autoPlay
-        className="h-full w-full bg-black"
-        src={resource.openUrl}
-        onError={() => { /* silently ignore — URL may redirect */ }}
-      />
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400">
+        <RefreshCw size={28} className="animate-spin text-primary" />
+        <span className="text-sm">Loading {resource.type.toLowerCase()}…</span>
+      </div>
     );
+  } else if (fetchState === 'error') {
+    viewer = (
+      <div className="flex h-full flex-col items-center justify-center gap-3">
+        <CircleAlert size={28} className="text-red-400" />
+        <span className="text-sm text-red-300">{fetchErr || 'Could not load resource'}</span>
+      </div>
+    );
+  } else if (blobUrl && resource.type === 'Video') {
+    viewer = <video controls autoPlay className="h-full w-full bg-black" src={blobUrl} />;
+  } else if (blobUrl) {
+    viewer = <iframe src={blobUrl} className="h-full w-full border-0 bg-white" />;
   } else {
-    // Document — serve inline via admin-view (PDF renders in iframe)
-    viewer = <iframe src={resource.openUrl} className="h-full w-full border-0 bg-white" />;
+    viewer = null;
   }
 
   return (
@@ -1591,7 +1628,7 @@ function CurriculumCoursesPage() {
                   {bulkJob.currentCourseName ? ` · Importing ${bulkJob.currentCourseName}` : ''}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {['queued', 'running'].includes(bulkJob.status) && (
                   <button data-testid="button-cancel-structure-import" onClick={cancelBulkImport} className={cx(btn, 'text-amber-700 border-amber-200 hover:bg-amber-50')}>
                     <X size={13}/> Stop after current
@@ -1602,6 +1639,11 @@ function CurriculumCoursesPage() {
                     <RefreshCw size={13}/> {pendingBulkCourseCount > 0
                       ? `Resume ${retryableBulkCourseCount} unfinished`
                       : `Retry ${bulkJob.failedCourses} failed`}
+                  </button>
+                )}
+                {!['queued', 'running'].includes(bulkJob.status) && (
+                  <button data-testid="button-dismiss-structure-import" onClick={() => setBulkJob(null)} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors" aria-label="Dismiss">
+                    <X size={14}/>
                   </button>
                 )}
               </div>
@@ -1645,7 +1687,7 @@ function CurriculumCoursesPage() {
                   {resourceJob.currentCourseName ? ` · Importing ${resourceJob.currentCourseName}` : ''}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {['queued', 'running'].includes(resourceJob.status) && (
                   <button data-testid="button-cancel-resource-import" onClick={cancelResourceImport} className={cx(btn, 'text-amber-700 border-amber-200 hover:bg-amber-50')}>
                     <X size={13}/> Stop after current
@@ -1656,6 +1698,11 @@ function CurriculumCoursesPage() {
                     <RefreshCw size={13}/> {pendingResourceCourseCount > 0
                       ? `Resume ${retryableResourceCourseCount} unfinished`
                       : `Retry ${retryableResourceCourseCount} failed`}
+                  </button>
+                )}
+                {!['queued', 'running'].includes(resourceJob.status) && (
+                  <button data-testid="button-dismiss-resource-import" onClick={() => setResourceJob(null)} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors" aria-label="Dismiss">
+                    <X size={14}/>
                   </button>
                 )}
               </div>

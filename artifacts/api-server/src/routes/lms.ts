@@ -2852,6 +2852,13 @@ router.post("/curriculum/resource-imports/:jobId/retry", requireAdmin, async (re
 // Ready resources are approved content; any authenticated user (admin or learner)
 // may view them. Unauthenticated requests are rejected.
 router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
+  // Block direct browser navigation (address bar / new tab) — resources must be
+  // fetched by the in-app previewer, not opened directly as a URL.
+  const fetchMode = req.headers["sec-fetch-mode"];
+  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
+    res.status(403).json({ error: "This resource can only be viewed inside the application." });
+    return;
+  }
   const isAdminUser = req.session.isAdmin === true;
   const clerkUserId = getAuth(req).userId;
   if (!isAdminUser && !clerkUserId) {
