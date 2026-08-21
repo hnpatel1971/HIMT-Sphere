@@ -214,14 +214,23 @@ function getVimeoId(url: string): string | null {
 
 function useWatermarkUrl(): string {
   const { user } = useUser();
-  const label = user?.fullName ?? user?.primaryEmailAddress?.emailAddress ?? 'Confidential';
-  const date  = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-  const text  = `${label}  ·  ${date}`;
-  // Build a repeating-tile SVG and convert to a data URL
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="340" height="160">
-    <text x="170" y="80" text-anchor="middle" dominant-baseline="middle"
-      font-family="system-ui,sans-serif" font-size="13" font-weight="600"
-      fill="rgba(255,255,255,0.18)" transform="rotate(-30,170,80)">${text}</text>
+  // DRM-008: always include registered email address
+  const email = user?.primaryEmailAddress?.emailAddress ?? 'Confidential';
+  // DRM-009: optional fields — name, timestamp
+  const name  = user?.fullName ?? '';
+  const ts    = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const line1 = name ? `${name}  ·  ${email}` : email;
+  const line2 = `CONFIDENTIAL  ·  ${ts}`;
+  // DRM-011: two staggered rows in a wider tile so the pattern varies across the page
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="420" height="220">
+    <g transform="rotate(-30,210,110)">
+      <text x="210" y="80" text-anchor="middle" dominant-baseline="middle"
+        font-family="system-ui,sans-serif" font-size="12" font-weight="600"
+        fill="rgba(255,255,255,0.20)">${line1}</text>
+      <text x="210" y="110" text-anchor="middle" dominant-baseline="middle"
+        font-family="system-ui,sans-serif" font-size="10" font-weight="500"
+        fill="rgba(255,255,255,0.14)">${line2}</text>
+    </g>
   </svg>`;
   return `url("data:image/svg+xml;base64,${btoa(svg)}")`;
 }

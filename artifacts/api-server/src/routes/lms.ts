@@ -2886,7 +2886,13 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
     res.setHeader("Content-Type", String(metadata.contentType ?? resource.mimeType ?? "application/octet-stream"));
     res.setHeader("Content-Disposition", `inline; filename="${(resource.fileName || resource.title).replace(/"/g, "")}"`);
     if (metadata.size) res.setHeader("Content-Length", String(metadata.size));
-    res.setHeader("Cache-Control", "private, max-age=3600");
+    // DRM-005: prevent caching and direct embedding of protected content
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
     file.createReadStream().pipe(res);
   } catch (error) {
     logger.error({ error }, "Could not serve resource preview");
@@ -2895,6 +2901,12 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
 });
 
 router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
+  // DRM-005: block direct browser navigation — must be fetched by the in-app viewer
+  const fetchMode = req.headers["sec-fetch-mode"];
+  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
+    res.status(403).json({ error: "This resource can only be viewed inside the application." });
+    return;
+  }
   try {
     const resourceId = String(req.params.resourceId);
     const [resource] = await db.select().from(courseResourcesTable)
@@ -2925,7 +2937,13 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
     res.setHeader("Content-Type", String(metadata.contentType ?? resource.mimeType ?? "application/octet-stream"));
     res.setHeader("Content-Disposition", `inline; filename="${(resource.fileName || resource.title).replace(/"/g, "")}"`);
     if (metadata.size) res.setHeader("Content-Length", String(metadata.size));
-    res.setHeader("Cache-Control", "private, max-age=3600");
+    // DRM-005: prevent caching and direct embedding of protected content
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
     file.createReadStream().pipe(res);
   } catch (error) {
     logger.error({ error: publicResourceImportError(error) }, "Could not serve learning resource");
