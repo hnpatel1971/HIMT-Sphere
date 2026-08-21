@@ -160,7 +160,22 @@ function Shell({ children }: { children: ReactNode }) {
         <header className="sticky top-0 z-30 flex h-[72px] items-center justify-between border-b border-border bg-card px-5 lg:px-10">
           <div className="flex items-center gap-3">
             <button data-testid="button-open-navigation" aria-label="Open navigation" onClick={() => setMobileOpen(true)} className="rounded-lg p-2 hover:bg-muted lg:hidden"><Menu size={20} /></button>
-            <div className="hidden items-center gap-2 text-sm text-muted-foreground sm:flex"><span>HIMT</span><ChevronRight size={14} /><span className="font-semibold text-foreground">{current?.label ?? 'Workspace'}</span></div>
+            <div className="hidden items-center gap-2 text-sm text-muted-foreground sm:flex">
+              <span>HIMT</span>
+              <ChevronRight size={14} />
+              {(() => {
+                const subLabel = location.startsWith('/curriculum/courses') ? 'Courses'
+                  : location.startsWith('/curriculum/groups') ? 'Groups'
+                  : location.startsWith('/curriculum/topics') ? 'Topics'
+                  : location.startsWith('/curriculum/contents') ? 'Contents'
+                  : location.startsWith('/curriculum/tags') ? 'Tags'
+                  : location.startsWith('/curriculum/glossary') ? 'Glossary'
+                  : location.startsWith('/curriculum/upload-status') ? 'Upload Status'
+                  : location.startsWith('/curriculum/others') ? 'Others'
+                  : null;
+                return subLabel ? (<><span>{current?.label ?? 'Workspace'}</span><ChevronRight size={14} /><span className="font-semibold text-foreground">{subLabel}</span></>) : (<span className="font-semibold text-foreground">{current?.label ?? 'Workspace'}</span>);
+              })()}
+            </div>
             <span className="text-lg font-bold sm:hidden">{current?.label ?? 'Workspace'}</span>
           </div>
           <div className="flex items-center gap-2.5">
@@ -189,6 +204,89 @@ function EmptyPanel({ icon: Icon, title, description, action }: { icon: typeof B
 function Pill({ children, tone }: { children: ReactNode; tone?: string }) { return <span className={cx('inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider', tone ?? statusTone(String(children)))}>{children}</span>; }
 function ProgressBar({ value, accent = 'bg-primary' }: { value: number; accent?: string }) { return <div className="h-2 overflow-hidden rounded-full bg-muted"><div className={cx('h-full rounded-full transition-all duration-500', accent)} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} /></div>; }
 function Button({ children, onClick, variant = 'primary', testId, type = 'button', disabled = false }: { children: ReactNode; onClick?: () => void; variant?: 'primary' | 'outline' | 'quiet'; testId: string; type?: 'button' | 'submit'; disabled?: boolean }) { return <button type={type} disabled={disabled} data-testid={testId} onClick={onClick} className={cx('inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50', variant === 'primary' && 'bg-primary text-primary-foreground shadow-sm hover:-translate-y-0.5 hover:bg-[hsl(var(--primary)/.9)]', variant === 'outline' && 'border border-border bg-card text-foreground hover:bg-muted shadow-sm', variant === 'quiet' && 'text-muted-foreground hover:bg-muted hover:text-foreground')}>{children}</button>; }
+
+// ─── ResourcePreviewModal ──────────────────────────────────────────────────────
+type PreviewResource = { id: string; title: string; type: string; openUrl: string; sourceUrl?: string | null; hasStoredFile?: boolean };
+
+function getYouTubeId(url: string): string | null {
+  const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]{11})/);
+  return m?.[1] ?? null;
+}
+function getVimeoId(url: string): string | null {
+  const m = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  return m?.[1] ?? null;
+}
+
+function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource; onClose: () => void }) {
+  const src = resource.sourceUrl ?? '';
+  const ytId   = src ? getYouTubeId(src) : null;
+  const vimId  = src ? getVimeoId(src) : null;
+  const isPublitas = src.includes('view.publitas.com');
+
+  let viewer: ReactNode;
+  if (ytId) {
+    viewer = (
+      <iframe
+        src={`https://www.youtube.com/embed/${ytId}?autoplay=1&rel=0`}
+        allow="autoplay; fullscreen; picture-in-picture"
+        allowFullScreen
+        className="h-full w-full border-0"
+      />
+    );
+  } else if (vimId) {
+    viewer = (
+      <iframe
+        src={`https://player.vimeo.com/video/${vimId}?autoplay=1`}
+        allow="autoplay; fullscreen; picture-in-picture"
+        allowFullScreen
+        className="h-full w-full border-0"
+      />
+    );
+  } else if (isPublitas) {
+    viewer = <iframe src={src} allowFullScreen className="h-full w-full border-0" />;
+  } else if (resource.type === 'Video') {
+    viewer = (
+      <video
+        controls
+        autoPlay
+        className="h-full w-full bg-black"
+        src={resource.openUrl}
+        onError={() => { /* silently ignore — URL may redirect */ }}
+      />
+    );
+  } else {
+    // Document — serve inline via admin-view (PDF renders in iframe)
+    viewer = <iframe src={resource.openUrl} className="h-full w-full border-0 bg-white" />;
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col bg-black/95" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      {/* Top bar */}
+      <div className="flex shrink-0 items-center justify-between gap-4 bg-gray-900 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {resource.type === 'Video'
+            ? <Video size={15} className="shrink-0 text-blue-400" />
+            : <FileText size={15} className="shrink-0 text-amber-400" />}
+          <span className="truncate text-sm font-semibold text-white">{resource.title}</span>
+          <span className="shrink-0 rounded bg-gray-700 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-gray-300">
+            {resource.type}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
+        >
+          <X size={18} />
+        </button>
+      </div>
+      {/* Viewer */}
+      <div className="min-h-0 flex-1">
+        {viewer}
+      </div>
+    </div>
+  );
+}
 
 function DashboardPage() {
   const [, setLocation] = useLocation();
@@ -1414,7 +1512,7 @@ function CurriculumCoursesPage() {
         {/* Back link + toolbar */}
         <div className="flex items-center justify-between">
           <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
-            <ChevronLeft size={18} /> Courses
+            <ChevronLeft size={18} /> Curriculum
           </Link>
           <div className="flex items-center gap-2">
             <button onClick={() => setShowCreate(true)} className={btn}><Scissors size={13}/> Create</button>
@@ -1984,7 +2082,7 @@ function SubTopicsPanel({
 
 // ─── CourseStructurePage — internal topics view for a curriculum course ──────
 
-type CourseTopicActivity = { id: string; title: string; type: string; status: string; order: number; openUrl?: string | null };
+type CourseTopicActivity = { id: string; title: string; type: string; status: string; order: number; openUrl?: string | null; sourceUrl?: string | null; mimeType?: string | null; hasStoredFile?: boolean };
 type CourseTopicSubtopic = { id: string; topicId: string; courseId: string; nid: string; name: string; order: number; activities: CourseTopicActivity[] };
 type CourseTopic = {
   id: string; courseId: string; nid: string; tid: string;
@@ -2867,6 +2965,9 @@ function SubTopicPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState('');
 
+  // Resource preview
+  const [previewResource, setPreviewResource] = useState<PreviewResource | null>(null);
+
   useEffect(() => {
     apiFetch<{ isAdmin: boolean }>('/auth/status')
       .then(r => setIsAdmin(r.isAdmin))
@@ -3034,7 +3135,7 @@ function SubTopicPage() {
                       {canOpen ? (
                         <button
                           type="button"
-                          onClick={() => window.open(a.openUrl!, '_blank', 'noopener,noreferrer')}
+                          onClick={() => setPreviewResource({ id: a.id, title: a.title, type: a.type, openUrl: a.openUrl!, sourceUrl: a.sourceUrl, hasStoredFile: a.hasStoredFile })}
                           className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-gray-50 cursor-pointer transition-colors group"
                         >
                           <span className="w-6 shrink-0 text-center text-xs font-medium text-gray-400">{idx + 1}</span>
@@ -3042,7 +3143,7 @@ function SubTopicPage() {
                           <span className="flex-1 text-sm text-gray-700 group-hover:text-primary transition-colors">{a.title}</span>
                           <span className="text-[10px] font-semibold uppercase text-gray-400 bg-gray-100 px-2 py-0.5 rounded shrink-0">{a.type || '—'}</span>
                           <span className={cx('text-[10px] font-semibold capitalize px-2 py-0.5 rounded shrink-0', statusCx)}>{a.status}</span>
-                          <ExternalLink size={13} className="shrink-0 text-gray-300 group-hover:text-primary transition-colors"/>
+                          <Eye size={13} className="shrink-0 text-gray-300 group-hover:text-primary transition-colors"/>
                         </button>
                       ) : (
                         <div className="flex items-center gap-4 px-5 py-3.5">
@@ -3095,6 +3196,11 @@ function SubTopicPage() {
             </div>
           </form>
         </Modal>
+      )}
+
+      {/* Resource preview modal */}
+      {previewResource && (
+        <ResourcePreviewModal resource={previewResource} onClose={() => setPreviewResource(null)} />
       )}
     </div>
   );

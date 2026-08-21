@@ -1009,10 +1009,22 @@ router.get("/curriculum/courses/:id/topics", async (req, res) => {
       type: courseResourcesTable.resourceType,
       status: courseResourcesTable.status,
       order: courseResourcesTable.order,
+      sourceUrl: courseResourcesTable.sourceUrl,
+      mimeType: courseResourcesTable.mimeType,
+      storagePath: courseResourcesTable.storagePath,
     }).from(courseResourcesTable)
       .where(eq(courseResourcesTable.courseId, req.params.id));
     const toActivity = (r: typeof resources[number]) => ({
-      ...r,
+      id: r.id,
+      subtopicId: r.subtopicId,
+      topicId: r.topicId,
+      title: r.title,
+      type: r.type,
+      status: r.status,
+      order: r.order,
+      sourceUrl: r.sourceUrl,
+      mimeType: r.mimeType,
+      hasStoredFile: Boolean(r.storagePath),
       openUrl: r.status === "ready" ? `/api/curriculum/resources/${r.id}/admin-view` : null,
     });
     const result = topics.map(t => ({
