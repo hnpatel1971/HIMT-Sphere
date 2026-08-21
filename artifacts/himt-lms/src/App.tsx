@@ -63,11 +63,6 @@ const navItems = [
   { href: '/', label: 'Overview', icon: LayoutDashboard },
   { href: '/curriculum', label: 'Curriculum', icon: BookMarked },
   { href: '/courses', label: 'Courses', icon: BookOpen },
-  { href: '/assignments', label: 'Assessments', icon: ClipboardCheck },
-  { href: '/learning-path', label: 'Learning Path', icon: RouteIcon },
-  { href: '/analytics', label: 'Reports', icon: BarChart3 },
-  { href: '/sessions', label: 'Calendar', icon: CalendarDays },
-  { href: '/certificates', label: 'Certificates', icon: Award },
 ];
 const adminItems = [
   { href: '/users', label: 'Users & roles', icon: Users },
