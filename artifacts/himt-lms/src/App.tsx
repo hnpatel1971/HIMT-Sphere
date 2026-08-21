@@ -1262,6 +1262,7 @@ function CurriculumCoursesPage() {
 
   // ── Sync state ────────────────────────────────────────────────────────────
   const [syncing, setSyncing] = useState(false);
+  const [tbImportMenu, setTbImportMenu] = useState(false);
 
   async function runSync() {
     setSyncing(true);
@@ -1506,21 +1507,27 @@ function CurriculumCoursesPage() {
 
   return (
     <div className="-mx-5 -my-7 lg:-mx-10 lg:-my-9" style={{ background:'#eef1fb', minHeight:'calc(100vh - 72px)' }}
-      onClick={() => { setDashMenu(null); setOthersMenu(null); }}>
+      onClick={() => { setDashMenu(null); setOthersMenu(null); setTbImportMenu(false); }}>
       <div className="p-8 lg:p-10 space-y-5">
 
         {/* Back link + toolbar */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <Link href="/curriculum" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors">
             <ChevronLeft size={18} /> Curriculum
           </Link>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Primary actions */}
             <button onClick={() => setShowCreate(true)} className={btn}><Scissors size={13}/> Create</button>
             <button onClick={handleDeleteSelected} disabled={selected.size === 0}
               className={cx(btn, selected.size === 0 && 'opacity-40 cursor-not-allowed')}>
               <Trash2 size={13}/> Delete
             </button>
             <button onClick={() => setShowImport(true)} className={btn}><FileUp size={13}/> Import</button>
+
+            {/* Divider */}
+            <div className="h-5 w-px bg-gray-200 mx-1" />
+
+            {/* TriByte: sync */}
             <button
               data-testid="button-sync-tribyte"
               onClick={handleSyncTriByte}
@@ -1528,23 +1535,38 @@ function CurriculumCoursesPage() {
               className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', syncing && 'opacity-60 cursor-not-allowed')}>
               <RefreshCw size={13} className={syncing ? 'animate-spin' : ''}/> {syncing ? 'Syncing…' : 'Sync from TriByte'}
             </button>
-            <button
-              data-testid="button-import-all-structures"
-              onClick={openBulkImport}
-              disabled={bulkJob ? ['queued', 'running'].includes(bulkJob.status) : false}
-              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', Boolean(bulkJob && ['queued', 'running'].includes(bulkJob.status)) && 'opacity-60 cursor-not-allowed')}>
-              <Layers size={13}/> Import all structures
-            </button>
-            <button
-              data-testid="button-import-learning-resources"
-              onClick={openResourceImport}
-              disabled={startingResourceImport || (resourceJob ? ['queued', 'running'].includes(resourceJob.status) : false)}
-              className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5', Boolean(startingResourceImport || (resourceJob && ['queued', 'running'].includes(resourceJob.status))) && 'opacity-60 cursor-not-allowed')}>
-              <Download size={13}/> {startingResourceImport ? 'Starting…' : 'Import learning resources'}
-            </button>
-            <span className="text-xs font-medium text-gray-500 whitespace-nowrap" data-testid="text-last-synced">
-              Last synced: {formatSyncDate(lastSyncedAt)}
-            </span>
+
+            {/* TriByte: import dropdown */}
+            <div className="relative" onClick={e => e.stopPropagation()}>
+              <button
+                onClick={() => setTbImportMenu(m => !m)}
+                className={cx(btn, 'border-primary/40 text-primary hover:bg-primary/5')}>
+                <Download size={13}/> TriByte Import <ChevronDown size={11} className={cx('transition-transform', tbImportMenu && 'rotate-180')}/>
+              </button>
+              {tbImportMenu && (
+                <div className="absolute right-0 top-full z-20 mt-1 w-60 rounded-xl border border-gray-200 bg-white py-1.5 shadow-lg">
+                  <button
+                    data-testid="button-import-all-structures"
+                    onClick={() => { openBulkImport(); setTbImportMenu(false); }}
+                    disabled={bulkJob ? ['queued', 'running'].includes(bulkJob.status) : false}
+                    className="flex w-full items-center gap-2.5 px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                    <Layers size={13}/> Import all structures
+                  </button>
+                  <button
+                    data-testid="button-import-learning-resources"
+                    onClick={() => { openResourceImport(); setTbImportMenu(false); }}
+                    disabled={startingResourceImport || (resourceJob ? ['queued', 'running'].includes(resourceJob.status) : false)}
+                    className="flex w-full items-center gap-2.5 px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                    <Download size={13}/> {startingResourceImport ? 'Starting…' : 'Import learning resources'}
+                  </button>
+                  <div className="mx-3 mt-1.5 border-t border-gray-100 pt-1.5 pb-0.5">
+                    <span className="text-[10px] font-medium text-gray-400" data-testid="text-last-synced">
+                      Last synced: {formatSyncDate(lastSyncedAt)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
