@@ -320,13 +320,166 @@ function CourseCard({ course, index }: { course: Course; index: number }) { cons
 function CourseForm({ onClose }: { onClose: () => void }) { const create = useCreateCourse(); const [form, setForm] = useState({ name: '', code: '', category: 'Maritime operations', language: 'English', duration: '6 weeks' }); const submit = (e: FormEvent) => { e.preventDefault(); create.mutate({ data: form }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCoursesQueryKey() }); onClose(); } }); }; return <Modal title="Create a course" onClose={onClose}><form onSubmit={submit} className="space-y-4"><Field label="Course name"><input required data-testid="input-course-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Bridge resource management" className="form-input" /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Course code"><input required data-testid="input-course-code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="BRM-204" className="form-input" /></Field><Field label="Duration"><input required data-testid="input-course-duration" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} className="form-input" /></Field></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Category"><input data-testid="input-course-category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="form-input" /></Field><Field label="Language"><input data-testid="input-course-language" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} className="form-input" /></Field></div><div className="flex justify-end gap-2 pt-3"><Button testId="button-cancel-course" variant="quiet" onClick={onClose}>Cancel</Button><Button testId="button-submit-course" type="submit" disabled={create.isPending}>{create.isPending ? 'Creating…' : 'Create course'}</Button></div></form></Modal>; }
 
 function CourseDetailPage() {
-  const { courseId = '' } = useParams<{ courseId: string }>(); const query = useGetCourse(courseId, { query: { queryKey: getGetCourseQueryKey(courseId), enabled: Boolean(courseId) } }); const course = query.data as CourseDetail | undefined; const [expanded, setExpanded] = useState<string | null>(null); const { isSignedIn, isLoaded } = useUser();
-  useEffect(() => { if (isSignedIn) void apiFetch('/learner/me').then(() => query.refetch()).catch(() => undefined); }, [isSignedIn]);
-  if (query.isLoading) return <LoadingPanel />; if (query.isError || !course) return <ErrorPanel onRetry={() => query.refetch()} />;
-  return <div><Link href="/courses" data-testid="link-back-courses" className="mb-7 inline-flex items-center gap-2 text-xs font-bold text-muted-foreground hover:text-foreground"><ChevronLeft size={15} /> All courses</Link><div className="mb-8 overflow-hidden rounded-xl bg-primary text-primary-foreground shadow-xs"><div className="relative p-6 sm:p-10"><div className="absolute right-0 top-0 h-full w-2/5 overflow-hidden opacity-20"><div className="absolute -right-16 -top-16 h-80 w-80 rounded-full border-[34px] border-white/20" /><div className="absolute right-24 top-20 h-40 w-40 rounded-full border-[20px] border-white/20" /></div><div className="relative max-w-2xl"><span className="text-[10px] font-semibold uppercase tracking-wider text-primary-foreground/80">{course.code} · {course.category}</span><h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">{course.name}</h1><p className="mt-4 max-w-xl text-sm leading-relaxed text-primary-foreground/90">{course.description}</p><div className="mt-7 flex flex-wrap items-center gap-4"><Button testId="button-resume-course" variant="outline" onClick={() => setExpanded(course.topics[0]?.id ?? null)}><Activity size={16} /> Resume course</Button><span className="text-[11px] font-semibold uppercase tracking-wider text-primary-foreground/80">{course.progress}% complete · {course.duration}</span></div></div></div></div>
-    {!isLoaded ? null : !isSignedIn ? <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm"><span>Sign in to access course materials assigned to you.</span><Link href="/sign-in" className="rounded-lg bg-primary px-4 py-2 font-bold text-primary-foreground">Learner sign in</Link></div> : <div className="mb-6 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">Your course access is checked before each private learning resource opens.</div>}
-    <div className="grid gap-7 xl:grid-cols-[1fr_360px]"><section className="rounded-xl border border-border bg-card shadow-xs p-5 sm:p-7"><div className="flex items-end justify-between"><div><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Course route</p><h2 className="mt-1 text-xl font-bold">Structure & activities</h2></div><span className="text-xs font-semibold text-muted-foreground">{course.topics.length} topics</span></div><div className="mt-7 space-y-3">{course.topics.map((topic, index) => <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} />)}</div></section><aside className="space-y-5"><section className="rounded-xl border border-border bg-card shadow-xs p-6"><p className="text-[11px] font-semibold uppercase tracking-wider text-primary">At a glance</p><div className="mt-5 space-y-5"><div><div className="flex justify-between text-sm"><span className="text-muted-foreground">Progress</span><b>{course.progress}%</b></div><div className="mt-2"><ProgressBar value={course.progress} /></div></div><InfoLine label="Language" value={course.language} /><InfoLine label="Learners" value={String(course.learners)} /><InfoLine label="Status" value={course.status} /></div></section><section className="rounded-xl border border-border bg-muted/40 p-6"><div className="flex gap-3"><GraduationCap size={18} className="shrink-0 text-primary" /><div><h3 className="font-bold text-sm">What you will be able to do</h3><ul className="mt-3 space-y-2 text-sm leading-relaxed text-muted-foreground">{course.objectives.map((objective) => <li key={objective} className="flex gap-2"><Check size={14} className="mt-1 shrink-0 text-primary" />{objective}</li>)}</ul></div></div></section></aside></div>
-  </div>;
+  const { courseId = '' } = useParams<{ courseId: string }>();
+  const query = useGetCourse(courseId, { query: { queryKey: getGetCourseQueryKey(courseId), enabled: Boolean(courseId) } });
+  const course = query.data as CourseDetail | undefined;
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const { isSignedIn, isLoaded } = useUser();
+
+  // Admin auth — same session-cookie pattern used across the app
+  const [isAdmin,    setIsAdmin]    = useState<boolean | null>(null);
+  const [showLogin,  setShowLogin]  = useState(false);
+  const [loginUser,  setLoginUser]  = useState('');
+  const [loginPass,  setLoginPass]  = useState('');
+  const [loginBusy,  setLoginBusy]  = useState(false);
+  const [loginError, setLoginError] = useState('');
+
+  useEffect(() => {
+    apiFetch<{ isAdmin: boolean }>('/auth/status')
+      .then(r => setIsAdmin(r.isAdmin))
+      .catch(() => setIsAdmin(false));
+  }, []);
+
+  // Refetch when Clerk learner signs in (unlocks openUrl for enrolled learner)
+  useEffect(() => {
+    if (isSignedIn) void apiFetch('/learner/me').then(() => query.refetch()).catch(() => undefined);
+  }, [isSignedIn]);
+
+  // Refetch when admin signs in so openUrl is populated immediately
+  useEffect(() => {
+    if (isAdmin) void query.refetch();
+  }, [isAdmin]);
+
+  const handleAdminLogin = async (e: FormEvent) => {
+    e.preventDefault();
+    setLoginBusy(true);
+    setLoginError('');
+    try {
+      await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
+      setIsAdmin(true);
+      setShowLogin(false);
+    } catch {
+      setLoginError('Incorrect username or password.');
+    } finally {
+      setLoginBusy(false);
+    }
+  };
+
+  if (query.isLoading) return <LoadingPanel />;
+  if (query.isError || !course) return <ErrorPanel onRetry={() => query.refetch()} />;
+
+  return (
+    <div>
+      <Link href="/courses" data-testid="link-back-courses" className="mb-7 inline-flex items-center gap-2 text-xs font-bold text-muted-foreground hover:text-foreground">
+        <ChevronLeft size={15} /> All courses
+      </Link>
+
+      {/* ── Course hero ── */}
+      <div className="mb-8 overflow-hidden rounded-xl bg-primary text-primary-foreground shadow-xs">
+        <div className="relative p-6 sm:p-10">
+          <div className="absolute right-0 top-0 h-full w-2/5 overflow-hidden opacity-20">
+            <div className="absolute -right-16 -top-16 h-80 w-80 rounded-full border-[34px] border-white/20" />
+            <div className="absolute right-24 top-20 h-40 w-40 rounded-full border-[20px] border-white/20" />
+          </div>
+          <div className="relative max-w-2xl">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-primary-foreground/80">{course.code} · {course.category}</span>
+            <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">{course.name}</h1>
+            <p className="mt-4 max-w-xl text-sm leading-relaxed text-primary-foreground/90">{course.description}</p>
+            <div className="mt-7 flex flex-wrap items-center gap-4">
+              <Button testId="button-resume-course" variant="outline" onClick={() => setExpanded(course.topics[0]?.id ?? null)}>
+                <Activity size={16} /> Resume course
+              </Button>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-primary-foreground/80">{course.progress}% complete · {course.duration}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Access banner ── */}
+      {isAdmin
+        ? <div className="mb-6 flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
+            <ShieldCheck size={16} className="shrink-0 text-primary" />
+            <span>Admin preview — all resources are accessible.</span>
+          </div>
+        : isSignedIn
+          ? <div className="mb-6 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">Your course access is checked before each private learning resource opens.</div>
+          : !isLoaded
+            ? null
+            : <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
+                <span>Sign in to access course materials assigned to you.</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Link href="/sign-in" className="rounded-lg bg-primary px-4 py-2 font-bold text-primary-foreground">Learner sign in</Link>
+                  <button data-testid="button-admin-preview" onClick={() => setShowLogin(true)} className="rounded-lg border border-border bg-card px-4 py-2 font-bold text-foreground hover:bg-muted">Admin preview</button>
+                </div>
+              </div>
+      }
+
+      {/* ── Course structure ── */}
+      <div className="grid gap-7 xl:grid-cols-[1fr_360px]">
+        <section className="rounded-xl border border-border bg-card shadow-xs p-5 sm:p-7">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Course route</p>
+              <h2 className="mt-1 text-xl font-bold">Structure & activities</h2>
+            </div>
+            <span className="text-xs font-semibold text-muted-foreground">{course.topics.length} topics</span>
+          </div>
+          <div className="mt-7 space-y-3">
+            {course.topics.map((topic, index) => (
+              <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} />
+            ))}
+          </div>
+        </section>
+        <aside className="space-y-5">
+          <section className="rounded-xl border border-border bg-card shadow-xs p-6">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">At a glance</p>
+            <div className="mt-5 space-y-5">
+              <div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Progress</span><b>{course.progress}%</b></div>
+                <div className="mt-2"><ProgressBar value={course.progress} /></div>
+              </div>
+              <InfoLine label="Language" value={course.language} />
+              <InfoLine label="Learners" value={String(course.learners)} />
+              <InfoLine label="Status" value={course.status} />
+            </div>
+          </section>
+          <section className="rounded-xl border border-border bg-muted/40 p-6">
+            <div className="flex gap-3">
+              <GraduationCap size={18} className="shrink-0 text-primary" />
+              <div>
+                <h3 className="font-bold text-sm">What you will be able to do</h3>
+                <ul className="mt-3 space-y-2 text-sm leading-relaxed text-muted-foreground">
+                  {course.objectives.map((objective) => (
+                    <li key={objective} className="flex gap-2"><Check size={14} className="mt-1 shrink-0 text-primary" />{objective}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      {/* ── Admin login modal ── */}
+      {showLogin && (
+        <Modal title="Admin preview" onClose={() => setShowLogin(false)}>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <p className="text-sm text-muted-foreground">Sign in with your HIMT admin credentials to preview all course resources.</p>
+            <Field label="Username">
+              <input required autoFocus data-testid="input-course-admin-username" value={loginUser} onChange={e => setLoginUser(e.target.value)} className="form-input" placeholder="admin username" autoComplete="username" />
+            </Field>
+            <Field label="Password">
+              <input required type="password" data-testid="input-course-admin-password" value={loginPass} onChange={e => setLoginPass(e.target.value)} className="form-input" autoComplete="current-password" />
+            </Field>
+            {loginError && <p className="text-sm text-destructive">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-course-admin-cancel" variant="quiet" onClick={() => setShowLogin(false)}>Cancel</Button>
+              <Button testId="button-course-admin-login" type="submit" disabled={loginBusy}>{loginBusy ? 'Signing in…' : 'Sign in'}</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
 }
 function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) {
   const hasContent = topic.activities.length > 0 || topic.subtopics.length > 0;
