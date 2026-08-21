@@ -1866,12 +1866,130 @@ function CurriculumCoursesPage() {
   );
 }
 
+// ─── SubTopicsPanel — expandable 3-level view used in TopicWorkspacePage ──────
+
+const RESOURCE_TYPE_ICON: Record<string, string> = {
+  Video: '▶',
+  Document: '📄',
+  Audio: '🎵',
+  Quiz: '❓',
+};
+
+function SubTopicsPanel({
+  subtopics,
+  onAdd,
+}: {
+  subtopics: CourseTopicSubtopic[];
+  onAdd: () => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setExpanded(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-xs">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-gray-800">Sub-topics</p>
+          <p className="mt-1 text-xs text-gray-500">
+            Click a sub-topic to see its learning resources (Level 3).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-xs hover:bg-gray-50"
+        >
+          <Plus size={13} /> Add New
+        </button>
+      </div>
+
+      {subtopics.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-gray-200 px-4 py-10 text-center text-sm text-gray-400">
+          No sub-topics have been added yet.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {subtopics.map((subtopic, idx) => {
+            const isOpen = expanded.has(subtopic.id);
+            const count = subtopic.activities?.length ?? 0;
+            return (
+              <div key={subtopic.id} className="overflow-hidden rounded-lg border border-gray-100">
+                {/* Sub-topic header row */}
+                <button
+                  type="button"
+                  onClick={() => toggle(subtopic.id)}
+                  className="flex w-full items-center gap-3 bg-gray-50 px-3 py-2.5 text-left hover:bg-gray-100"
+                >
+                  <span className="w-6 shrink-0 text-center text-xs font-semibold text-gray-400">
+                    {idx + 1}
+                  </span>
+                  <span className="flex-1 text-sm font-medium text-gray-700">{subtopic.name}</span>
+                  <span className="shrink-0 text-[10px] font-semibold text-gray-400">
+                    {count} {count === 1 ? 'resource' : 'resources'}
+                  </span>
+                  <ChevronDown
+                    size={13}
+                    className={cx('shrink-0 text-gray-400 transition-transform', isOpen && 'rotate-180')}
+                  />
+                </button>
+
+                {/* Activities (level 3) */}
+                {isOpen && (
+                  <div className="border-t border-gray-100 bg-white">
+                    {count === 0 ? (
+                      <p className="px-3 py-3 text-xs text-gray-400 italic">
+                        No resources imported for this sub-topic.
+                      </p>
+                    ) : (
+                      subtopic.activities.map((act, aIdx) => {
+                        const icon = RESOURCE_TYPE_ICON[act.type] ?? '📎';
+                        const statusColor =
+                          act.status === 'ready'
+                            ? 'text-emerald-600'
+                            : act.status === 'unavailable'
+                              ? 'text-red-400'
+                              : 'text-amber-500';
+                        return (
+                          <div
+                            key={act.id}
+                            className="flex items-center gap-3 border-b border-gray-50 px-3 py-2 last:border-0"
+                          >
+                            <span className="w-5 shrink-0 text-center text-[10px] text-gray-300">
+                              {aIdx + 1}
+                            </span>
+                            <span className="w-4 shrink-0 text-center text-xs">{icon}</span>
+                            <span className="flex-1 text-xs text-gray-700">{act.title}</span>
+                            <span className={cx('shrink-0 text-[10px] font-semibold capitalize', statusColor)}>
+                              {act.status}
+                            </span>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── CourseStructurePage — internal topics view for a curriculum course ──────
 
+type CourseTopicActivity = { id: string; title: string; type: string; status: string; order: number };
+type CourseTopicSubtopic = { id: string; topicId: string; courseId: string; nid: string; name: string; order: number; activities: CourseTopicActivity[] };
 type CourseTopic = {
   id: string; courseId: string; nid: string; tid: string;
   name: string; order: number; thumbUrl: string; faculty: string;
-  subtopics: Array<{ id: string; topicId: string; courseId: string; nid: string; name: string; order: number }>;
+  subtopics: CourseTopicSubtopic[];
 };
 
 type TopicWorkspaceTab = 'Attributes' | 'Book' | 'Copy Attributes' | 'Sub Topics' | 'Tests' | 'Tasks' | 'Faculty' | 'Glossary';
@@ -2090,32 +2208,10 @@ function TopicWorkspacePage() {
 
     if (activeTab === 'Sub Topics') {
       return (
-        <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-xs">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-gray-800">Sub-topics</p>
-              <p className="mt-1 text-xs text-gray-500">Organise the learning sections inside this topic.</p>
-            </div>
-            {toolbarButton('Add New', <Plus size={13} />, () => requireAdminThen(() => setAddOpen(true)))}
-          </div>
-          {topic.subtopics.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-gray-200 px-4 py-10 text-center text-sm text-gray-400">
-              No sub-topics have been added yet.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {topic.subtopics.map((subtopic, index) => (
-                <div key={subtopic.id} className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-                  <span className="w-6 text-center text-xs font-semibold text-gray-400">{index + 1}</span>
-                  <span className="flex-1 text-sm font-medium text-gray-700">{subtopic.name}</span>
-                  <span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-                    Sub-topic
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <SubTopicsPanel
+          subtopics={topic.subtopics}
+          onAdd={() => requireAdminThen(() => setAddOpen(true))}
+        />
       );
     }
 

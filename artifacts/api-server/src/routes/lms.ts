@@ -1001,9 +1001,26 @@ router.get("/curriculum/courses/:id/topics", async (req, res) => {
     topics.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const subtopics = await db.select().from(courseSubtopicsTable)
       .where(eq(courseSubtopicsTable.courseId, req.params.id));
+    const resources = await db.select({
+      id: courseResourcesTable.id,
+      subtopicId: courseResourcesTable.subtopicId,
+      title: courseResourcesTable.title,
+      type: courseResourcesTable.resourceType,
+      status: courseResourcesTable.status,
+      order: courseResourcesTable.order,
+    }).from(courseResourcesTable)
+      .where(eq(courseResourcesTable.courseId, req.params.id));
     const result = topics.map(t => ({
       ...t,
-      subtopics: subtopics.filter(s => s.topicId === t.id).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+      subtopics: subtopics
+        .filter(s => s.topicId === t.id)
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map(s => ({
+          ...s,
+          activities: resources
+            .filter(r => r.subtopicId === s.id)
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+        })),
     }));
     res.json(result);
   } catch (err) { res.status(500).json({ error: String(err) }); }
