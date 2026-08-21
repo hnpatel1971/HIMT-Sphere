@@ -2387,6 +2387,7 @@ function CourseStructurePage() {
 
   // UI state — subtopics
   const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
+  const [expandedSubtopics, setExpandedSubtopics] = useState<Set<string>>(new Set());
   const [addSubTopic, setAddSubTopic] = useState<CourseTopic | null>(null);
   const [addSubName, setAddSubName] = useState('');
   type SubtopicRow = CourseTopic['subtopics'][number];
@@ -2508,6 +2509,14 @@ function CourseStructurePage() {
     setExpandedTopics(prev => {
       const next = new Set(prev);
       if (next.has(topicId)) next.delete(topicId); else next.add(topicId);
+      return next;
+    });
+  }
+
+  function toggleSubtopic(subtopicId: string) {
+    setExpandedSubtopics(prev => {
+      const next = new Set(prev);
+      if (next.has(subtopicId)) next.delete(subtopicId); else next.add(subtopicId);
       return next;
     });
   }
@@ -2717,22 +2726,59 @@ function CourseStructurePage() {
                       )}
                       {topic.subtopics.length > 0 && (
                         <ul className="space-y-1.5 mb-3">
-                          {topic.subtopics.map((s, si) => (
-                            <li key={s.id} className="flex items-center gap-2 rounded-lg bg-white border border-gray-100 px-3 py-2">
-                              <span className="text-[10px] font-semibold text-gray-400 w-5 shrink-0">{si + 1}.</span>
-                              <span className="flex-1 text-xs text-gray-700 font-medium">{s.name}</span>
-                              <button
-                                onClick={() => requireAdminThen(() => { setEditSub(s); setEditSubName(s.name); })}
-                                className="shrink-0 p-1 rounded text-gray-400 hover:text-primary hover:bg-primary/5 transition-colors"
-                                title="Edit sub-topic"
-                              ><Pencil size={11}/></button>
-                              <button
-                                onClick={() => requireAdminThen(() => handleDeleteSubtopic(s.id, s.name))}
-                                className="shrink-0 p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                                title="Delete sub-topic"
-                              ><Trash2 size={11}/></button>
-                            </li>
-                          ))}
+                          {topic.subtopics.map((s, si) => {
+                            const isSubExpanded = expandedSubtopics.has(s.id);
+                            const actCount = s.activities?.length ?? 0;
+                            return (
+                              <li key={s.id} className="rounded-lg bg-white border border-gray-100 overflow-hidden">
+                                {/* Sub-topic header */}
+                                <div className="flex items-center gap-2 px-3 py-2">
+                                  <span className="text-[10px] font-semibold text-gray-400 w-5 shrink-0">{si + 1}.</span>
+                                  <button
+                                    onClick={() => toggleSubtopic(s.id)}
+                                    className="flex-1 flex items-center gap-1.5 text-left"
+                                  >
+                                    <span className="flex-1 text-xs text-gray-700 font-medium">{s.name}</span>
+                                    <span className="text-[10px] text-gray-400 font-medium whitespace-nowrap">
+                                      {actCount} {actCount === 1 ? 'resource' : 'resources'}
+                                    </span>
+                                    <ChevronDown size={11} className={cx('shrink-0 text-gray-400 transition-transform', isSubExpanded && 'rotate-180')}/>
+                                  </button>
+                                  <button
+                                    onClick={() => requireAdminThen(() => { setEditSub(s); setEditSubName(s.name); })}
+                                    className="shrink-0 p-1 rounded text-gray-400 hover:text-primary hover:bg-primary/5 transition-colors"
+                                    title="Edit sub-topic"
+                                  ><Pencil size={11}/></button>
+                                  <button
+                                    onClick={() => requireAdminThen(() => handleDeleteSubtopic(s.id, s.name))}
+                                    className="shrink-0 p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                    title="Delete sub-topic"
+                                  ><Trash2 size={11}/></button>
+                                </div>
+                                {/* Resources (level 3) */}
+                                {isSubExpanded && (
+                                  <div className="border-t border-gray-50">
+                                    {actCount === 0 ? (
+                                      <p className="px-4 py-2 text-[10px] text-gray-400 italic">No resources imported yet.</p>
+                                    ) : (
+                                      s.activities.map((a, ai) => {
+                                        const icon = a.type === 'Video' ? '▶' : a.type === 'Document' ? '📄' : '📎';
+                                        const statusCx = a.status === 'ready' ? 'text-emerald-600' : a.status === 'unavailable' ? 'text-red-400' : 'text-amber-500';
+                                        return (
+                                          <div key={a.id} className="flex items-center gap-2 px-4 py-1.5 border-b border-gray-50 last:border-0 bg-gray-50/50">
+                                            <span className="w-5 text-center text-[10px] text-gray-300">{ai + 1}</span>
+                                            <span className="text-[10px]">{icon}</span>
+                                            <span className="flex-1 text-[11px] text-gray-600">{a.title}</span>
+                                            <span className={cx('text-[10px] font-semibold capitalize', statusCx)}>{a.status}</span>
+                                          </div>
+                                        );
+                                      })
+                                    )}
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
                         </ul>
                       )}
                       <button
