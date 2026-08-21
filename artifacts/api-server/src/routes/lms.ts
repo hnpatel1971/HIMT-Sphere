@@ -2076,8 +2076,11 @@ const EXTERNAL_VIDEO_HOSTS = new Set([
   "youtube.com",
   "vimeo.com",
   "www.vimeo.com",
-  // TriByte stores certain final-node videos in a field_clipping_wurl form
-  // value pointing at this provider rather than in a direct media tag.
+]);
+// Publitas is a digital-publication platform (flipbooks / slide decks), not
+// a video host. Redirect to its viewer URL the same way we redirect to
+// external videos, but classify the resource as Document.
+const EXTERNAL_DOCUMENT_HOSTS = new Set([
   "view.publitas.com",
 ]);
 
@@ -2099,6 +2102,10 @@ function isTriByteUrl(url: string): boolean {
 
 function isApprovedExternalVideoUrl(url: string): boolean {
   try { return EXTERNAL_VIDEO_HOSTS.has(new URL(url).hostname.toLowerCase()); }
+  catch { return false; }
+}
+function isApprovedExternalDocumentUrl(url: string): boolean {
+  try { return EXTERNAL_DOCUMENT_HOSTS.has(new URL(url).hostname.toLowerCase()); }
   catch { return false; }
 }
 
@@ -2445,7 +2452,10 @@ async function migrateTriByteResource(
 
   // Hosted recordings are learner-playable references rather than downloadable
   // files. Only allow the reviewed providers instead of following arbitrary URLs.
-  if (isApprovedExternalVideoUrl(resource.sourceUrl) && resource.resourceType === "Video") {
+  if (
+    (isApprovedExternalVideoUrl(resource.sourceUrl) && resource.resourceType === "Video") ||
+    (isApprovedExternalDocumentUrl(resource.sourceUrl) && resource.resourceType === "Document")
+  ) {
     await db.update(courseResourcesTable).set({ status: "ready", error: null, updatedAt: new Date() })
       .where(eq(courseResourcesTable.id, id));
     return "imported";

@@ -51,7 +51,7 @@ test("classifies extensionless protected clipping downloads as videos on video-c
   }]);
 });
 
-test("keeps a Publitas video stored in a final content form field", () => {
+test("classifies a Publitas URL in a final content form field as Document, not Video", () => {
   const resources = parseTriByteResources(`
     <input name="title" value="HANDOUT" />
     <input name="field_clipping_wurl[0][value]" value="https://view.publitas.com/himt/refresher-for-medical-first-aid" />
@@ -59,8 +59,8 @@ test("keeps a Publitas video stored in a final content form field", () => {
 
   assert.deepEqual(resources, [{
     sourceUrl: "https://view.publitas.com/himt/refresher-for-medical-first-aid",
-    title: "Video HANDOUT",
-    resourceType: "Video",
+    title: "HANDOUT",
+    resourceType: "Document",
     fileName: "refresher-for-medical-first-aid",
   }]);
 });

@@ -13,7 +13,11 @@ const RECORDING_EXTENSION = /\.(mp4|m4v|mov|webm|avi|mp3|wav|m4a|ogg)(?:[?#].*)?
 const PACKAGE_EXTENSION = /\.(zip|rar|7z|scorm)(?:[?#].*)?$/i;
 const RESOURCE_LANGUAGE = /\b(document|download|attachment|resource|recording|video|audio|file|package|scorm|material|handout|presentation)\b/i;
 const MEDIA_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com|publitas\.com|drive\.google\.com|onedrive\.live\.com|sharepoint\.com)\b/i;
-const VIDEO_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com|publitas\.com)\b/i;
+const VIDEO_HOST = /\b(youtu\.be|youtube\.com|vimeo\.com)\b/i;
+// Publitas, Issuu, and similar platforms host digital publications (flipbooks /
+// slide decks), not video streams. Classify them as Document so learners
+// see the correct icon and the resource opens with the right label.
+const PUBLICATION_HOST = /\b(publitas\.com|issuu\.com|calameo\.com|fliphtml5\.com)\b/i;
 const ADMIN_ONLY_PATH = /\/(user|reviewer|generate|apps|node\/\d+\/edit)(?:\/|$|\?)/i;
 const NAVIGATION_PATH = /\/(?:taxonomy\/term|reviewer\/topics|category)(?:\/|$|\?)/i;
 const TRIBYTE_FILE_PATH = /\/(?:sites\/(?:default|all)\/files|files|file|download)(?:\/|$)/i;
@@ -46,6 +50,7 @@ function fileNameFromUrl(url: string): string {
 }
 
 function resourceTypeFor(url: string, context: string): TriByteResourceType {
+  if (PUBLICATION_HOST.test(url)) return "Document";
   if (VIDEO_HOST.test(url)) return "Video";
   if (/[?&]format=pdf(?:&|$)/i.test(url)) return "Document";
   if (RECORDING_EXTENSION.test(url) || /\b(recording|audio|video)\b/i.test(context)) {
@@ -142,7 +147,7 @@ export function parseTriByteResources(html: string, baseUrl: string): ParsedTriB
     const name = field[1].match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1] ?? "";
     if (!/^field_clipping_(?:wurl|murl)\[\d+\]\[value\]$/i.test(name)) continue;
     const value = field[1].match(/\bvalue\s*=\s*["']([^"']+)["']/i)?.[1];
-    if (value) add(value, `Video ${pageTitle}`);
+    if (value) add(value, pageTitle);
   }
 
   return resources;
