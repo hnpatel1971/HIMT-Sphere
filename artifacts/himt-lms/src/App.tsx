@@ -201,7 +201,7 @@ function ProgressBar({ value, accent = 'bg-primary' }: { value: number; accent?:
 function Button({ children, onClick, variant = 'primary', testId, type = 'button', disabled = false }: { children: ReactNode; onClick?: () => void; variant?: 'primary' | 'outline' | 'quiet'; testId: string; type?: 'button' | 'submit'; disabled?: boolean }) { return <button type={type} disabled={disabled} data-testid={testId} onClick={onClick} className={cx('inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50', variant === 'primary' && 'bg-primary text-primary-foreground shadow-sm hover:-translate-y-0.5 hover:bg-[hsl(var(--primary)/.9)]', variant === 'outline' && 'border border-border bg-card text-foreground hover:bg-muted shadow-sm', variant === 'quiet' && 'text-muted-foreground hover:bg-muted hover:text-foreground')}>{children}</button>; }
 
 // ─── ResourcePreviewModal ──────────────────────────────────────────────────────
-type PreviewResource = { id: string; title: string; type: string; openUrl: string; sourceUrl?: string | null; hasStoredFile?: boolean };
+type PreviewResource = { id: string; title: string; type: string; openUrl: string; sourceUrl?: string | null; hasStoredFile?: boolean; mimeType?: string | null };
 
 function getYouTubeId(url: string): string | null {
   const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]{11})/);
@@ -235,18 +235,149 @@ function useWatermarkUrl(): string {
   return `url("data:image/svg+xml;base64,${btoa(svg)}")`;
 }
 
+// ── DocumentPageViewer ────────────────────────────────────────────────────────
+// Fetches PDF pages rendered server-side (with baked-in watermark) as PNG images.
+// The source file is never sent to the browser — only opaque page images are.
+function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
+  const [pageCount, setPageCount] = useState<number | null>(null);
+  const [isPdf,     setIsPdf]     = useState<boolean | null>(null);
+  // externalViewer: 'publitas' → show iframe via server-side redirect (URL never in client JS)
+  const [externalViewer, setExternalViewer] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageImgUrl, setPageImgUrl]   = useState<string | null>(null);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [pageError,   setPageError]   = useState('');
+
+  const base = resource.openUrl; // e.g. /api/curriculum/resources/:id/admin-view
+
+  // 1. Fetch page count on mount
+  useEffect(() => {
+    fetch(`${base}/page-count`, { credentials: 'include' })
+      .then(r => r.json())
+      .then((d: { pageCount: number | null; isPdf: boolean; externalViewer?: string }) => {
+        setIsPdf(d.isPdf);
+        setPageCount(d.pageCount);
+        setExternalViewer(d.externalViewer ?? null);
+      })
+      .catch(() => setIsPdf(false));
+  }, [base]);
+
+  // 2. Fetch each page image (blob URL so no raw endpoint URL in the DOM)
+  useEffect(() => {
+    if (!isPdf || !pageCount) return;
+    let cancelled = false;
+    setPageLoading(true);
+    setPageError('');
+    fetch(`${base}/page/${currentPage}`, { credentials: 'include' })
+      .then(async r => {
+        if (!r.ok) throw new Error(`Server returned ${r.status}`);
+        const blob = await r.blob();
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        setPageImgUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
+        setPageLoading(false);
+      })
+      .catch(e => { if (!cancelled) { setPageError(String(e)); setPageLoading(false); } });
+    return () => { cancelled = true; };
+  }, [base, currentPage, isPdf, pageCount]);
+
+  // 3. Revoke final blob URL on unmount
+  useEffect(() => () => { setPageImgUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; }); }, []);
+
+  if (isPdf === null) return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400">
+      <RefreshCw size={28} className="animate-spin text-primary" />
+      <span className="text-sm">Loading document…</span>
+    </div>
+  );
+
+  if (isPdf === false) {
+    // Publitas web publication: embed via the server-side redirect endpoint.
+    // The Publitas URL is never exposed in client-side JavaScript — the browser
+    // follows a 302 from /open or /admin-view with only enrollment-gated access.
+    if (externalViewer === 'publitas') return (
+      <iframe
+        src={resource.openUrl}
+        allowFullScreen
+        className="h-full w-full border-0"
+        title={resource.title}
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+      />
+    );
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400">
+        <FileText size={28} className="text-amber-400" />
+        <span className="text-sm font-medium text-gray-300">This document format cannot be previewed.</span>
+        <span className="text-xs text-gray-500">Contact your administrator to request a PDF version.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col select-none">
+      {/* Page image */}
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-gray-200">
+        {pageLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-200">
+            <RefreshCw size={24} className="animate-spin text-primary" />
+          </div>
+        )}
+        {pageError && !pageLoading && (
+          <div className="flex flex-col items-center gap-2 text-red-400">
+            <CircleAlert size={24} />
+            <span className="text-sm">{pageError}</span>
+          </div>
+        )}
+        {pageImgUrl && !pageError && (
+          <img
+            src={pageImgUrl}
+            alt={`Page ${currentPage}`}
+            draggable={false}
+            onContextMenu={e => e.preventDefault()}
+            className="max-h-full max-w-full object-contain shadow-xl"
+            style={{ opacity: pageLoading ? 0.4 : 1, transition: 'opacity 0.15s' }}
+          />
+        )}
+      </div>
+      {/* Pagination controls — only shown when there are multiple pages */}
+      {pageCount !== null && pageCount > 1 && (
+        <div className="flex shrink-0 items-center justify-center gap-4 bg-gray-900 px-4 py-2">
+          <button
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage <= 1}
+            className="rounded-lg px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >‹ Prev</button>
+          <span className="text-sm text-gray-400">
+            Page <strong className="text-white">{currentPage}</strong> of {pageCount}
+          </span>
+          <button
+            onClick={() => setCurrentPage(p => Math.min(pageCount, p + 1))}
+            disabled={currentPage >= pageCount}
+            className="rounded-lg px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >Next ›</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource; onClose: () => void }) {
   const watermarkUrl = useWatermarkUrl();
+  // sourceUrl is only populated for Video resources (redacted for Documents server-side
+  // to prevent external document URL exposure — see DRM note in lms.ts activityFor/toActivity).
   const src = resource.sourceUrl ?? '';
-  const ytId      = src ? getYouTubeId(src) : null;
-  const vimId     = src ? getVimeoId(src) : null;
-  const isPublitas = src.includes('view.publitas.com');
-  // Stored files are fetched as blob URLs so the raw endpoint URL is never
-  // exposed in the DOM and cannot be copied and opened in a new tab.
-  const needsBlob = !ytId && !vimId && !isPublitas;
+  const ytId  = src ? getYouTubeId(src) : null;
+  const vimId = src ? getVimeoId(src) : null;
 
-  // Ref used to forward scroll events from the overlay into the PDF iframe
-  const docIframeRef = useRef<HTMLIFrameElement>(null);
+  // Recording resources (stored MP4/audio) stream raw bytes like Video resources.
+  // All other non-media types (Document, Learning package, etc.) go through the
+  // page-image renderer (DocumentPageViewer). Publitas publications, detected via
+  // the page-count response, render as iframes within DocumentPageViewer — their
+  // URLs are never returned in client JSON, only resolved server-side on request.
+  const MEDIA_TYPES = new Set(['Video', 'Recording']);
+  const isStoredDoc = !MEDIA_TYPES.has(resource.type ?? '') && !ytId && !vimId;
+  // Only fetch blob for media resources (the player needs a raw byte stream).
+  const needsBlob = !isStoredDoc && !ytId && !vimId;
 
   const [blobUrl,    setBlobUrl]    = useState<string | null>(null);
   const [fetchState, setFetchState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -324,8 +455,10 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
         className="h-full w-full border-0"
       />
     );
-  } else if (isPublitas) {
-    viewer = <iframe src={src} allowFullScreen className="h-full w-full border-0" />;
+  } else if (isStoredDoc) {
+    // Stored document (PDF or other): serve as page images with baked-in watermark.
+    // The source file is never sent to the browser.
+    viewer = <DocumentPageViewer resource={resource} />;
   } else if (fetchState === 'loading') {
     viewer = (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400">
@@ -340,7 +473,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
         <span className="text-sm text-red-300">{fetchErr || 'Could not load resource'}</span>
       </div>
     );
-  } else if (blobUrl && resource.type === 'Video') {
+  } else if (blobUrl && (resource.type === 'Video' || resource.type === 'Recording')) {
     viewer = (
       <video
         controls
@@ -353,29 +486,8 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       />
     );
   } else if (blobUrl) {
-    viewer = (
-      <div className="relative h-full w-full">
-        <iframe
-          ref={docIframeRef}
-          src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0`}
-          className="h-full w-full border-0 bg-white"
-          tabIndex={-1}
-        />
-        {/* Transparent overlay — intercepts all pointer events so the browser's
-            native PDF toolbar (print/save/settings) can never be clicked, and
-            focus never moves into the iframe (keeping our keydown listener live).
-            Wheel events are forwarded into the iframe so the document scrolls normally. */}
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 z-[5] cursor-default"
-          onContextMenu={e => e.preventDefault()}
-          onMouseDown={e => e.preventDefault()}
-          onWheel={e => {
-            docIframeRef.current?.contentWindow?.scrollBy({ top: e.deltaY, left: e.deltaX, behavior: 'auto' });
-          }}
-        />
-      </div>
-    );
+    // Fallback blob viewer for external-URL resources (server redirected to sourceUrl)
+    viewer = <iframe src={blobUrl} className="h-full w-full border-0 bg-white" tabIndex={-1} />;
   } else {
     viewer = null;
   }
@@ -550,6 +662,7 @@ function CourseDetailPage() {
   const course = query.data as CourseDetail | undefined;
   const [expanded, setExpanded] = useState<string | null>(null);
   const { isSignedIn, isLoaded } = useUser();
+  const [previewResource, setPreviewResource] = useState<PreviewResource | null>(null);
 
   // Admin auth — same session-cookie pattern used across the app
   const [isAdmin,    setIsAdmin]    = useState<boolean | null>(null);
@@ -651,7 +764,7 @@ function CourseDetailPage() {
           </div>
           <div className="mt-7 space-y-3">
             {course.topics.map((topic, index) => (
-              <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} />
+              <TopicBlock key={topic.id} topic={topic} index={index} open={expanded === topic.id} onToggle={() => !topic.locked && setExpanded(expanded === topic.id ? null : topic.id)} onOpenDocument={setPreviewResource} />
             ))}
           </div>
         </section>
@@ -684,6 +797,11 @@ function CourseDetailPage() {
         </aside>
       </div>
 
+      {/* ── Document page-image viewer (learner DRM modal) ── */}
+      {previewResource && (
+        <ResourcePreviewModal resource={previewResource} onClose={() => setPreviewResource(null)} />
+      )}
+
       {/* ── Admin login modal ── */}
       {showLogin && (
         <Modal title="Admin preview" onClose={() => setShowLogin(false)}>
@@ -706,7 +824,7 @@ function CourseDetailPage() {
     </div>
   );
 }
-function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: number; open: boolean; onToggle: () => void }) {
+function TopicBlock({ topic, index, open, onToggle, onOpenDocument }: { topic: Topic; index: number; open: boolean; onToggle: () => void; onOpenDocument?: (r: PreviewResource) => void }) {
   const hasContent = topic.activities.length > 0 || topic.subtopics.length > 0;
   return <div className={cx('overflow-hidden rounded-xl border border-border', topic.locked && 'opacity-60')}>
     <button data-testid={`button-topic-${topic.id}`} onClick={onToggle} className="flex w-full items-center gap-4 p-4 text-left hover:bg-muted">
@@ -716,12 +834,12 @@ function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: num
     </button>
     {open && <div className="border-t border-border bg-muted/30 p-2">
       {!hasContent && <p className="px-3 py-4 text-xs text-muted-foreground">No learning resources have been migrated for this topic yet.</p>}
-      {topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}
-      {topic.subtopics.map((subtopic, subtopicIndex) => <SubtopicBlock key={subtopic.id} subtopic={subtopic} index={subtopicIndex} />)}
+      {topic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} onOpenDocument={onOpenDocument} />)}
+      {topic.subtopics.map((subtopic, subtopicIndex) => <SubtopicBlock key={subtopic.id} subtopic={subtopic} index={subtopicIndex} onOpenDocument={onOpenDocument} />)}
     </div>}
   </div>;
 }
-function SubtopicBlock({ subtopic, index }: { subtopic: Subtopic; index: number }) {
+function SubtopicBlock({ subtopic, index, onOpenDocument }: { subtopic: Subtopic; index: number; onOpenDocument?: (r: PreviewResource) => void }) {
   const [open, setOpen] = useState(false);
   const count = subtopic.activities.length;
   return <div data-testid={`subtopic-${subtopic.id}`} className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
@@ -736,15 +854,27 @@ function SubtopicBlock({ subtopic, index }: { subtopic: Subtopic; index: number 
       <ChevronDown size={14} className={cx('shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
     </button>
     {open && (count > 0
-      ? <div className="border-t border-border p-1">{subtopic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>
+      ? <div className="border-t border-border p-1">{subtopic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} onOpenDocument={onOpenDocument} />)}</div>
       : <p className="border-t border-border px-3 py-3 text-xs text-muted-foreground">No learning resources have been migrated for this sub-topic yet.</p>)}
   </div>;
 }
-function ActivityRow({ activity }: { activity: ActivityType }) {
+function ActivityRow({ activity, onOpenDocument }: { activity: ActivityType; onOpenDocument?: (r: PreviewResource) => void }) {
   const isAvailable = Boolean(activity.openUrl);
+  const handleClick = () => {
+    if (!activity.openUrl) return;
+    // Non-video resources → open in the DRM page-image viewer modal so the source file
+    // never reaches the browser. Videos and unrecognised types open in a new tab.
+    const isVideo = activity.type === 'Video';
+    if (!isVideo && onOpenDocument) {
+      const a = activity as ActivityType & { sourceUrl?: string | null; mimeType?: string | null; hasStoredFile?: boolean };
+      onOpenDocument({ id: activity.id, title: activity.title, type: activity.type ?? '', openUrl: activity.openUrl, sourceUrl: a.sourceUrl ?? null, mimeType: a.mimeType ?? null, hasStoredFile: a.hasStoredFile ?? true });
+    } else {
+      window.open(activity.openUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
   return <button
     data-testid={`button-activity-${activity.id}`}
-    onClick={() => { if (activity.openUrl) window.open(activity.openUrl, '_blank', 'noopener,noreferrer'); }}
+    onClick={handleClick}
     disabled={!isAvailable}
     className={cx('flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-card disabled:cursor-default disabled:hover:bg-transparent', isAvailable && 'cursor-pointer')}
   ><span className={cx('grid h-7 w-7 place-items-center rounded-lg', activity.status.toLowerCase().includes('complete') ? 'bg-[hsl(var(--primary)/.15)] text-primary' : 'bg-card text-primary shadow-sm border border-border')}>{activity.status.toLowerCase().includes('complete') ? <Check size={14} /> : activity.protected ? <LockKeyhole size={13} /> : <PlayIcon />}</span><span className="min-w-0 flex-1 truncate text-xs font-semibold">{activity.title}</span><span className="text-[11px] font-semibold text-muted-foreground">{activity.duration}</span>{isAvailable && <Download size={14} className="text-primary" aria-label="Open learning resource" />}</button>;
@@ -2755,9 +2885,6 @@ function CourseStructurePage() {
           </button>
           <div className="flex items-center gap-2">
             <button onClick={() => requireAdminThen(() => setAddOpen(true))} className={btn}><Plus size={13}/> Add Topic</button>
-            <button onClick={() => requireAdminThen(handleImport)} disabled={importing} className={cx(btn, importing && 'opacity-50 cursor-not-allowed')}>
-              <RefreshCw size={13} className={importing ? 'animate-spin' : ''}/> Import from TriByte
-            </button>
           </div>
         </div>
 
@@ -2778,10 +2905,9 @@ function CourseStructurePage() {
           <div className="flex flex-col items-center justify-center rounded-xl bg-white border border-dashed border-gray-200 py-20 text-center">
             <Layers size={36} className="mb-4 text-gray-300"/>
             <p className="text-base font-semibold text-gray-500">No topics yet</p>
-            <p className="mt-1 text-sm text-gray-400 max-w-xs">Add a topic manually or click "Import from TriByte" to pull the course structure automatically.</p>
+            <p className="mt-1 text-sm text-gray-400 max-w-xs">Add a topic to get started.</p>
             <div className="mt-5 flex gap-2">
               <button onClick={() => requireAdminThen(() => setAddOpen(true))} className={btn}><Plus size={13}/> Add Topic</button>
-              <button onClick={() => requireAdminThen(handleImport)} disabled={importing} className={btn}><RefreshCw size={13}/> Import from TriByte</button>
             </div>
           </div>
         )}
@@ -3134,7 +3260,7 @@ function SubTopicPage() {
                       {canOpen ? (
                         <button
                           type="button"
-                          onClick={() => setPreviewResource({ id: a.id, title: a.title, type: a.type, openUrl: a.openUrl!, sourceUrl: a.sourceUrl, hasStoredFile: a.hasStoredFile })}
+                          onClick={() => setPreviewResource({ id: a.id, title: a.title, type: a.type, openUrl: a.openUrl!, sourceUrl: a.sourceUrl, hasStoredFile: a.hasStoredFile, mimeType: a.mimeType })}
                           className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-gray-50 cursor-pointer transition-colors group"
                         >
                           <span className="w-6 shrink-0 text-center text-xs font-medium text-gray-400">{idx + 1}</span>

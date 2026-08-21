@@ -9,6 +9,7 @@ import { parseTriByteCoursePage, type TriByteScrapedCourse } from "../lib/tribyt
 import { parseTriByteResources, type ParsedTriByteResource } from "../lib/tribyte-resource-parser";
 import { getStoredResource, resourceObjectPath, storeResourceStream } from "../lib/resource-storage";
 import { inspectStoredResource } from "../lib/resource-recovery";
+import { renderProtectedPage, getPageCountFromStream } from "../lib/pdf-renderer";
 import {
   courses as coursesTable,
   assignments as assignmentsTable,
@@ -622,7 +623,16 @@ router.get("/courses/:courseId", async (req, res) => {
       status: "available",
       protected: false,
       resourceId: resource.id,
-       openUrl: canOpenResources ? `/api/curriculum/resources/${resource.id}/open` : null,
+      openUrl: canOpenResources ? `/api/curriculum/resources/${resource.id}/open` : null,
+      // DRM: sourceUrl is redacted for non-Video resources so the client cannot
+      // detect external document URLs (e.g. Publitas) and bypass the page renderer.
+      // Video resources retain it so the player can detect YouTube/Vimeo embeds.
+      // Expose sourceUrl for Video and Recording types so the player can detect
+      // YouTube/Vimeo embeds and direct media URLs. Documents redact it to prevent
+      // clients from detecting and directly accessing external document URLs (e.g. Publitas).
+      sourceUrl: (resource.resourceType === "Video" || resource.resourceType === "Recording") ? resource.sourceUrl : null,
+      mimeType: resource.mimeType,
+      hasStoredFile: Boolean(resource.storagePath),
     });
     const learnerTopics = topics.map(topic => {
       const topicSubtopics = subtopics
@@ -1022,7 +1032,8 @@ router.get("/curriculum/courses/:id/topics", async (req, res) => {
       type: r.type,
       status: r.status,
       order: r.order,
-      sourceUrl: r.sourceUrl,
+      // Expose sourceUrl for Video/Recording; redact for Documents (prevents external URL bypass).
+      sourceUrl: (r.type === "Video" || r.type === "Recording") ? r.sourceUrl : null,
       mimeType: r.mimeType,
       hasStoredFile: Boolean(r.storagePath),
       openUrl: r.status === "ready" ? `/api/curriculum/resources/${r.id}/admin-view` : null,
@@ -2878,7 +2889,28 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
         res.status(404).json({ error: "Resource has no content" });
         return;
       }
+      // DRM: Documents and other non-media types must go through the page-image renderer.
+      // Recording resources stream raw bytes (they are video/audio); Publitas publications
+      // are web-hosted interactive content (not downloadable files) so they redirect to the
+      // viewer directly (the URL is not exposed in client JSON, only via server-side redirect).
+      const isMediaType = resource.resourceType === "Video" || resource.resourceType === "Recording";
+      const isPublitasResource = resource.sourceUrl.includes("view.publitas.com");
+      if (!isMediaType && !isPublitasResource) {
+        res.status(403).json({
+          error: "Document content must be accessed through the secure page viewer.",
+          hint: "Use GET /admin-view/page-count and /admin-view/page/:n instead.",
+        });
+        return;
+      }
       res.redirect(302, resource.sourceUrl);
+      return;
+    }
+    // DRM: stored non-media files are served only via the page-image renderer.
+    if (resource.resourceType !== "Video" && resource.resourceType !== "Recording") {
+      res.status(403).json({
+        error: "Document content must be accessed through the secure page viewer.",
+        hint: "Use GET /admin-view/page-count and /admin-view/page/:n instead.",
+      });
       return;
     }
     const file = await getStoredResource(resource.storagePath);
@@ -2901,9 +2933,12 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
 });
 
 router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
-  // DRM-005: block direct browser navigation — must be fetched by the in-app viewer
+  // DRM-005: block direct browser navigation — must be fetched by the in-app viewer.
+  // Exception: iframes are allowed so that Publitas publications can be embedded via
+  // a server-side redirect without exposing the Publitas URL to the client JavaScript.
   const fetchMode = req.headers["sec-fetch-mode"];
-  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
+  const fetchDest = req.headers["sec-fetch-dest"] as string | undefined;
+  if ((fetchMode === "navigate" || fetchMode === "nested-navigate") && fetchDest !== "iframe") {
     res.status(403).json({ error: "This resource can only be viewed inside the application." });
     return;
   }
@@ -2929,7 +2964,30 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
         res.status(404).json({ error: "Learning resource is not available" });
         return;
       }
+      // DRM: external Documents must go through the page-image renderer.
+      // Recording resources and Publitas web publications are exempt:
+      // - Recordings are media (video/audio) that stream raw bytes
+      // - Publitas URLs are for interactive web-hosted publications (not downloadable files);
+      //   the viewer URL is not included in client JSON — it reaches the browser only via
+      //   this server-side redirect, preserving DRM intent while restoring functionality.
+      const isMediaType = resource.resourceType === "Video" || resource.resourceType === "Recording";
+      const isPublitasResource = resource.sourceUrl?.includes("view.publitas.com");
+      if (!isMediaType && !isPublitasResource) {
+        res.status(403).json({
+          error: "Document content must be accessed through the secure page viewer.",
+          hint: "Use GET /open/page-count and /open/page/:n instead.",
+        });
+        return;
+      }
       res.redirect(302, resource.sourceUrl);
+      return;
+    }
+    // DRM: stored non-media files are served only via the page-image renderer.
+    if (resource.resourceType !== "Video" && resource.resourceType !== "Recording") {
+      res.status(403).json({
+        error: "Document content must be accessed through the secure page viewer.",
+        hint: "Use GET /open/page-count and /open/page/:n instead.",
+      });
       return;
     }
     const file = await getStoredResource(resource.storagePath);
@@ -2948,6 +3006,209 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
   } catch (error) {
     logger.error({ error: publicResourceImportError(error) }, "Could not serve learning resource");
     res.status(500).json({ error: "Could not open learning resource" });
+  }
+});
+
+// ── DRM helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch a non-TriByte external document URL and return a Node.js Readable.
+ * Used by the page-count and page-render endpoints for externally hosted documents.
+ */
+async function fetchExternalDocumentStream(sourceUrl: string): Promise<Readable> {
+  const response = await fetch(sourceUrl);
+  if (!response.ok || !response.body) {
+    throw new Error(`External document fetch failed with HTTP ${response.status}`);
+  }
+  // response.body is a Web ReadableStream<Uint8Array>; convert to Node Readable
+  return Readable.from(response.body as AsyncIterable<Uint8Array>);
+}
+
+/** Build watermark lines from the current authenticated user. */
+async function getWatermarkInfo(req: import("express").Request): Promise<{ line1: string; line2: string }> {
+  const ts = new Date().toLocaleString("en-GB", {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  const line2 = `CONFIDENTIAL · ${ts}`;
+  if (req.session.isAdmin === true) {
+    const name = process.env.ADMIN_USERNAME ?? "HIMT Admin";
+    return { line1: `Admin: ${name}`, line2 };
+  }
+  const clerkUserId = getAuth(req).userId;
+  if (clerkUserId) {
+    const u = await clerkClient.users.getUser(clerkUserId);
+    const email = u.primaryEmailAddress?.emailAddress ?? "unknown";
+    const name = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+    return { line1: name ? `${name} · ${email}` : email, line2 };
+  }
+  return { line1: "Unknown User", line2 };
+}
+
+/** Apply DRM response headers for page images. */
+function setPageImageHeaders(res: import("express").Response): void {
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
+}
+
+// ── Admin: page-count ─────────────────────────────────────────────────────────
+
+router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req, res) => {
+  const fetchMode = req.headers["sec-fetch-mode"];
+  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
+    res.status(403).json({ error: "This resource can only be viewed inside the application." }); return;
+  }
+  // Admin-view routes require a valid admin session — not just any Clerk identity.
+  if (req.session.isAdmin !== true) {
+    res.status(403).json({ error: "Admin access required" }); return;
+  }
+  try {
+    const [resource] = await db.select().from(courseResourcesTable)
+      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    if (!resource) { res.status(404).json({ error: "Resource not found" }); return; }
+    let docStream: Readable;
+    if (resource.storagePath) {
+      const file = await getStoredResource(resource.storagePath);
+      docStream = file.createReadStream() as unknown as Readable;
+    } else if (resource.sourceUrl?.includes("view.publitas.com")) {
+      // Publitas is a web-hosted interactive publication — the viewer URL returns HTML,
+      // not a downloadable PDF. Signal the client to use the server-side iframe embed.
+      res.json({ pageCount: null, isPdf: false, externalViewer: "publitas" }); return;
+    } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
+      docStream = await fetchExternalDocumentStream(resource.sourceUrl);
+    } else {
+      res.json({ pageCount: null, isPdf: false }); return;
+    }
+    const pageCount = await getPageCountFromStream(docStream, resource.mimeType);
+    res.json({ pageCount, isPdf: pageCount !== null });
+  } catch (error) {
+    logger.error({ error }, "admin page-count failed");
+    res.status(500).json({ error: "Could not determine page count" });
+  }
+});
+
+// ── Admin: render page ────────────────────────────────────────────────────────
+
+router.get("/curriculum/resources/:resourceId/admin-view/page/:pageNum", async (req, res) => {
+  const fetchMode = req.headers["sec-fetch-mode"];
+  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
+    res.status(403).json({ error: "This resource can only be viewed inside the application." }); return;
+  }
+  // Admin-view routes require a valid admin session — not just any Clerk identity.
+  if (req.session.isAdmin !== true) {
+    res.status(403).json({ error: "Admin access required" }); return;
+  }
+  const pageNum = parseInt(req.params.pageNum, 10);
+  if (!Number.isFinite(pageNum) || pageNum < 1) {
+    res.status(400).json({ error: "Invalid page number" }); return;
+  }
+  try {
+    const [resource] = await db.select().from(courseResourcesTable)
+      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    if (!resource) { res.status(404).json({ error: "Resource not available" }); return; }
+    let docStream: Readable;
+    if (resource.storagePath) {
+      const file = await getStoredResource(resource.storagePath);
+      docStream = file.createReadStream() as unknown as Readable;
+    } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
+      docStream = await fetchExternalDocumentStream(resource.sourceUrl);
+    } else {
+      res.status(404).json({ error: "Resource content not available" }); return;
+    }
+    const { line1, line2 } = await getWatermarkInfo(req);
+    const png = await renderProtectedPage({
+      pdfStream: docStream,
+      pageNum, watermarkLine1: line1, watermarkLine2: line2,
+      mimeType: resource.mimeType,
+    });
+    setPageImageHeaders(res);
+    res.end(png);
+  } catch (error) {
+    logger.error({ error }, "admin page render failed");
+    res.status(500).json({ error: "Could not render page" });
+  }
+});
+
+// ── Learner: page-count ───────────────────────────────────────────────────────
+
+router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res) => {
+  const fetchMode = req.headers["sec-fetch-mode"];
+  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
+    res.status(403).json({ error: "This resource can only be viewed inside the application." }); return;
+  }
+  try {
+    const [resource] = await db.select().from(courseResourcesTable)
+      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    if (!resource || resource.status !== "ready") { res.status(404).json({ error: "Resource not available" }); return; }
+    if (!(await learnerCanAccessCourse(req, resource.courseId))) {
+      const signedIn = Boolean(getAuth(req).userId);
+      res.status(signedIn ? 403 : 401).json({ error: signedIn ? "Not enrolled in this course" : "Sign in required" }); return;
+    }
+    let docStream: Readable;
+    if (resource.storagePath) {
+      const file = await getStoredResource(resource.storagePath);
+      docStream = file.createReadStream() as unknown as Readable;
+    } else if (resource.sourceUrl?.includes("view.publitas.com")) {
+      // Publitas publications are web-hosted interactive content, not downloadable PDFs.
+      // Signal the client to use the server-side iframe embed path instead.
+      res.json({ pageCount: null, isPdf: false, externalViewer: "publitas" }); return;
+    } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
+      docStream = await fetchExternalDocumentStream(resource.sourceUrl);
+    } else {
+      res.json({ pageCount: null, isPdf: false }); return;
+    }
+    const pageCount = await getPageCountFromStream(docStream, resource.mimeType);
+    res.json({ pageCount, isPdf: pageCount !== null });
+  } catch (error) {
+    logger.error({ error }, "learner page-count failed");
+    res.status(500).json({ error: "Could not determine page count" });
+  }
+});
+
+// ── Learner: render page ──────────────────────────────────────────────────────
+
+router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, res) => {
+  const fetchMode = req.headers["sec-fetch-mode"];
+  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
+    res.status(403).json({ error: "This resource can only be viewed inside the application." }); return;
+  }
+  const pageNum = parseInt(req.params.pageNum, 10);
+  if (!Number.isFinite(pageNum) || pageNum < 1) {
+    res.status(400).json({ error: "Invalid page number" }); return;
+  }
+  try {
+    const [resource] = await db.select().from(courseResourcesTable)
+      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    if (!resource || resource.status !== "ready") { res.status(404).json({ error: "Resource not available" }); return; }
+    if (!(await learnerCanAccessCourse(req, resource.courseId))) {
+      const signedIn = Boolean(getAuth(req).userId);
+      res.status(signedIn ? 403 : 401).json({ error: signedIn ? "Not enrolled in this course" : "Sign in required" }); return;
+    }
+    let docStream: Readable;
+    if (resource.storagePath) {
+      const file = await getStoredResource(resource.storagePath);
+      docStream = file.createReadStream() as unknown as Readable;
+    } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
+      docStream = await fetchExternalDocumentStream(resource.sourceUrl);
+    } else {
+      res.status(404).json({ error: "Resource content not available" }); return;
+    }
+    const { line1, line2 } = await getWatermarkInfo(req);
+    const png = await renderProtectedPage({
+      pdfStream: docStream,
+      pageNum, watermarkLine1: line1, watermarkLine2: line2,
+      mimeType: resource.mimeType,
+    });
+    setPageImageHeaders(res);
+    res.end(png);
+  } catch (error) {
+    logger.error({ error }, "learner page render failed");
+    res.status(500).json({ error: "Could not render page" });
   }
 });
 

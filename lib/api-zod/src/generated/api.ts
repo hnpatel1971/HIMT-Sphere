@@ -179,7 +179,10 @@ export const GetCourseResponse = zod.object({
   "status": zod.string(),
   "protected": zod.boolean(),
   "resourceId": zod.string().nullable(),
-  "openUrl": zod.string().nullable()
+  "openUrl": zod.string().nullable(),
+  "sourceUrl": zod.string().nullable().optional(),
+  "mimeType": zod.string().nullable().optional(),
+  "hasStoredFile": zod.boolean().optional()
 })),
   "subtopics": zod.array(zod.object({
   "id": zod.string(),
@@ -192,7 +195,10 @@ export const GetCourseResponse = zod.object({
   "status": zod.string(),
   "protected": zod.boolean(),
   "resourceId": zod.string().nullable(),
-  "openUrl": zod.string().nullable()
+  "openUrl": zod.string().nullable(),
+  "sourceUrl": zod.string().nullable().optional(),
+  "mimeType": zod.string().nullable().optional(),
+  "hasStoredFile": zod.boolean().optional()
 }))
 }))
 }))
