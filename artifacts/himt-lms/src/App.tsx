@@ -30,7 +30,7 @@ import { shadcn } from '@clerk/themes';
 import { Link, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import {
   Activity, Archive, ArrowRight, Award, BarChart3, Bell, BookOpen, BookMarked, CalendarDays, Check, ChevronDown,
-  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, Eye, FileSearch, FileUp, Filter, GraduationCap,
+  ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, Eye, FileSearch, FileText, FileUp, Filter, GraduationCap,
   GripVertical, Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
   MinusCircle, Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
@@ -2013,13 +2013,16 @@ function TopicWorkspacePage() {
   const [courseName, setCourseName] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<TopicWorkspaceTab>('Attributes');
+  const [activeTab, setActiveTab] = useState<TopicWorkspaceTab>('Sub Topics');
   const [selected, setSelected] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addName, setAddName] = useState('');
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState('');
   const [editThumb, setEditThumb] = useState('');
+  type TopicSubtopicRow = CourseTopic['subtopics'][number];
+  const [editSub, setEditSub] = useState<TopicSubtopicRow | null>(null);
+  const [editSubName, setEditSubName] = useState('');
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [showLogin, setShowLogin] = useState(false);
   const [loginUser, setLoginUser] = useState('');
@@ -2147,6 +2150,26 @@ function TopicWorkspacePage() {
     });
   }
 
+  async function handleEditSubtopic(e: FormEvent) {
+    e.preventDefault();
+    if (!editSub || !editSubName.trim()) return;
+    try {
+      await apiFetch(`/curriculum/subtopics/${editSub.id}`, 'PATCH', { name: editSubName.trim() });
+      setEditSub(null);
+      await loadTopic();
+      toast({ title: 'Sub-topic renamed' });
+    } catch (err) { handleAdminError(err); }
+  }
+
+  async function handleDeleteSubtopic(subId: string, subName: string) {
+    if (!confirm(`Delete sub-topic "${subName}"? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/curriculum/subtopics/${subId}`, 'DELETE');
+      await loadTopic();
+      toast({ title: 'Sub-topic deleted' });
+    } catch (err) { handleAdminError(err); }
+  }
+
   const toolbarButton = (
     label: string,
     icon: ReactNode,
@@ -2207,11 +2230,75 @@ function TopicWorkspacePage() {
     }
 
     if (activeTab === 'Sub Topics') {
+      const subtopics = topic.subtopics;
+      if (subtopics.length === 0) {
+        return (
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 bg-white px-6 py-16 text-center">
+            <Layers size={30} className="mx-auto mb-3 text-gray-300" strokeWidth={1.4}/>
+            <p className="text-sm font-semibold text-gray-600">No sub-topics yet</p>
+            <p className="mt-1 text-xs text-gray-400">Add a sub-topic to get started.</p>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setAddOpen(true)}
+                className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+              >
+                <Plus size={12}/> Add Sub-topic
+              </button>
+            )}
+          </div>
+        );
+      }
       return (
-        <SubTopicsPanel
-          subtopics={topic.subtopics}
-          onAdd={() => requireAdminThen(() => setAddOpen(true))}
-        />
+        <div className="rounded-xl border border-gray-100 bg-white shadow-xs overflow-hidden">
+          <ul className="divide-y divide-gray-100">
+            {subtopics.map((s, si) => {
+              const actCount = s.activities?.length ?? 0;
+              return (
+                <li key={s.id} className="flex items-center group hover:bg-gray-50 transition-colors">
+                  <Link
+                    href={`/curriculum/courses/${courseId}/topics/${topicId}/subtopics/${s.id}`}
+                    className="flex flex-1 items-center gap-4 px-5 py-4"
+                  >
+                    <span className="w-7 shrink-0 text-center text-xs font-semibold text-gray-400">{si + 1}</span>
+                    <span className="flex-1 text-sm font-medium text-gray-800 group-hover:text-primary transition-colors">{s.name}</span>
+                    <span className="text-xs text-gray-400 shrink-0">
+                      {actCount} {actCount === 1 ? 'resource' : 'resources'}
+                    </span>
+                    <ChevronRight size={15} className="shrink-0 text-gray-300 group-hover:text-primary transition-colors"/>
+                  </Link>
+                  {isAdmin && (
+                    <div className="flex items-center gap-0.5 pr-4 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        onClick={() => { setEditSub(s); setEditSubName(s.name); }}
+                        className="p-1.5 rounded text-gray-400 hover:text-primary hover:bg-primary/10 transition-colors"
+                        title="Rename"
+                      ><Pencil size={13}/></button>
+                      <button
+                        type="button"
+                        onClick={() => requireAdminThen(() => handleDeleteSubtopic(s.id, s.name))}
+                        className="p-1.5 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        title="Delete"
+                      ><Trash2 size={13}/></button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {isAdmin && (
+            <div className="border-t border-gray-100 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => requireAdminThen(() => setAddOpen(true))}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+              >
+                <Plus size={12}/> Add Sub-topic
+              </button>
+            </div>
+          )}
+        </div>
       );
     }
 
@@ -2318,6 +2405,20 @@ function TopicWorkspacePage() {
         </Modal>
       )}
 
+      {editSub && (
+        <Modal title="Rename Sub-topic" onClose={() => setEditSub(null)}>
+          <form onSubmit={handleEditSubtopic} className="space-y-4">
+            <Field label="Sub-topic name">
+              <input required autoFocus value={editSubName} onChange={event => setEditSubName(event.target.value)} className="form-input"/>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-cancel-subtopic-rename" variant="quiet" onClick={() => setEditSub(null)}>Cancel</Button>
+              <Button testId="button-save-subtopic-rename" type="submit">Save</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
       {editOpen && topic && (
         <Modal title="Edit Topic" onClose={() => setEditOpen(false)}>
           <form onSubmit={handleEditTopic} className="space-y-4">
@@ -2384,15 +2485,6 @@ function CourseStructurePage() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
-  // UI state — subtopics
-  const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
-  const [expandedSubtopics, setExpandedSubtopics] = useState<Set<string>>(new Set());
-  const [addSubTopic, setAddSubTopic] = useState<CourseTopic | null>(null);
-  const [addSubName, setAddSubName] = useState('');
-  type SubtopicRow = CourseTopic['subtopics'][number];
-  const [editSub, setEditSub] = useState<SubtopicRow | null>(null);
-  const [editSubName, setEditSubName] = useState('');
 
   // Admin auth state (session cookie via POST /api/auth/login)
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
@@ -2505,22 +2597,6 @@ function CourseStructurePage() {
     finally { setImporting(false); }
   }
 
-  function toggleExpanded(topicId: string) {
-    setExpandedTopics(prev => {
-      const next = new Set(prev);
-      if (next.has(topicId)) next.delete(topicId); else next.add(topicId);
-      return next;
-    });
-  }
-
-  function toggleSubtopic(subtopicId: string) {
-    setExpandedSubtopics(prev => {
-      const next = new Set(prev);
-      if (next.has(subtopicId)) next.delete(subtopicId); else next.add(subtopicId);
-      return next;
-    });
-  }
-
   function handleDragStart(id: string) {
     setDraggedId(id);
   }
@@ -2566,37 +2642,6 @@ function CourseStructurePage() {
   function handleDragEnd() {
     setDraggedId(null);
     setDragOverId(null);
-  }
-
-  async function handleAddSubtopic(e: FormEvent) {
-    e.preventDefault();
-    if (!addSubTopic || !addSubName.trim()) return;
-    try {
-      await apiFetch(`/curriculum/topics/${addSubTopic.id}/subtopics`, 'POST', { name: addSubName.trim() });
-      setAddSubTopic(null); setAddSubName('');
-      loadTopics();
-      toast({ title: 'Sub-topic added' });
-    } catch (err) { handle401(err); }
-  }
-
-  async function handleEditSubSave(e: FormEvent) {
-    e.preventDefault();
-    if (!editSub) return;
-    try {
-      await apiFetch(`/curriculum/subtopics/${editSub.id}`, 'PATCH', { name: editSubName });
-      setEditSub(null);
-      loadTopics();
-      toast({ title: 'Sub-topic updated' });
-    } catch (err) { handle401(err); }
-  }
-
-  async function handleDeleteSubtopic(subId: string, subName: string) {
-    if (!confirm(`Delete sub-topic "${subName}"? This cannot be undone.`)) return;
-    try {
-      await apiFetch(`/curriculum/subtopics/${subId}`, 'DELETE');
-      loadTopics();
-      toast({ title: 'Sub-topic deleted' });
-    } catch (err) { handle401(err); }
   }
 
   const btn = "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors whitespace-nowrap";
@@ -2648,7 +2693,6 @@ function CourseStructurePage() {
           <div className="space-y-3">
             {saving && <p className="text-xs text-gray-400 text-center">Saving order…</p>}
             {topics.map((topic, idx) => {
-              const isExpanded = expandedTopics.has(topic.id);
               const isDragging = draggedId === topic.id;
               const isDragOver = dragOverId === topic.id;
               return (
@@ -2694,14 +2738,6 @@ function CourseStructurePage() {
                         {displayTopicName(topic.name, idx + 1)}
                       </Link>
                       {topic.faculty && <p className="mt-0.5 text-xs text-gray-400">Faculty: <span className="text-gray-600">{topic.faculty}</span></p>}
-                      {/* Subtopic count / toggle */}
-                      <button
-                        onClick={() => toggleExpanded(topic.id)}
-                        className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
-                      >
-                        <ChevronDown size={12} className={cx('transition-transform', isExpanded && 'rotate-180')}/>
-                        {topic.subtopics.length} sub-topic{topic.subtopics.length !== 1 ? 's' : ''}
-                      </button>
                     </div>
 
                     {/* Actions */}
@@ -2718,77 +2754,6 @@ function CourseStructurePage() {
                     </div>
                   </div>
 
-                  {/* Expandable subtopics panel */}
-                  {isExpanded && (
-                    <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
-                      {topic.subtopics.length === 0 && (
-                        <p className="text-xs text-gray-400 italic mb-2">No sub-topics yet. Add one below.</p>
-                      )}
-                      {topic.subtopics.length > 0 && (
-                        <ul className="space-y-1.5 mb-3">
-                          {topic.subtopics.map((s, si) => {
-                            const isSubExpanded = expandedSubtopics.has(s.id);
-                            const actCount = s.activities?.length ?? 0;
-                            return (
-                              <li key={s.id} className="rounded-lg bg-white border border-gray-100 overflow-hidden">
-                                {/* Sub-topic header */}
-                                <div className="flex items-center gap-2 px-3 py-2">
-                                  <span className="text-[10px] font-semibold text-gray-400 w-5 shrink-0">{si + 1}.</span>
-                                  <button
-                                    onClick={() => toggleSubtopic(s.id)}
-                                    className="flex-1 flex items-center gap-1.5 text-left"
-                                  >
-                                    <span className="flex-1 text-xs text-gray-700 font-medium">{s.name}</span>
-                                    <span className="text-[10px] text-gray-400 font-medium whitespace-nowrap">
-                                      {actCount} {actCount === 1 ? 'resource' : 'resources'}
-                                    </span>
-                                    <ChevronDown size={11} className={cx('shrink-0 text-gray-400 transition-transform', isSubExpanded && 'rotate-180')}/>
-                                  </button>
-                                  <button
-                                    onClick={() => requireAdminThen(() => { setEditSub(s); setEditSubName(s.name); })}
-                                    className="shrink-0 p-1 rounded text-gray-400 hover:text-primary hover:bg-primary/5 transition-colors"
-                                    title="Edit sub-topic"
-                                  ><Pencil size={11}/></button>
-                                  <button
-                                    onClick={() => requireAdminThen(() => handleDeleteSubtopic(s.id, s.name))}
-                                    className="shrink-0 p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                                    title="Delete sub-topic"
-                                  ><Trash2 size={11}/></button>
-                                </div>
-                                {/* Resources (level 3) */}
-                                {isSubExpanded && (
-                                  <div className="border-t border-gray-50">
-                                    {actCount === 0 ? (
-                                      <p className="px-4 py-2 text-[10px] text-gray-400 italic">No resources imported yet.</p>
-                                    ) : (
-                                      s.activities.map((a, ai) => {
-                                        const icon = a.type === 'Video' ? '▶' : a.type === 'Document' ? '📄' : '📎';
-                                        const statusCx = a.status === 'ready' ? 'text-emerald-600' : a.status === 'unavailable' ? 'text-red-400' : 'text-amber-500';
-                                        return (
-                                          <div key={a.id} className="flex items-center gap-2 px-4 py-1.5 border-b border-gray-50 last:border-0 bg-gray-50/50">
-                                            <span className="w-5 text-center text-[10px] text-gray-300">{ai + 1}</span>
-                                            <span className="text-[10px]">{icon}</span>
-                                            <span className="flex-1 text-[11px] text-gray-600">{a.title}</span>
-                                            <span className={cx('text-[10px] font-semibold capitalize', statusCx)}>{a.status}</span>
-                                          </div>
-                                        );
-                                      })
-                                    )}
-                                  </div>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                      <button
-                        onClick={() => requireAdminThen(() => { setAddSubTopic(topic); setAddSubName(''); })}
-                        className={cx(btn, 'text-primary border-primary/20 hover:bg-primary/5')}
-                      >
-                        <Plus size={12}/> Add Sub-topic
-                      </button>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -2873,35 +2838,111 @@ function CourseStructurePage() {
         </Modal>
       )}
 
-      {/* Add Sub-topic modal */}
-      {addSubTopic && (
-        <Modal title={`Add Sub-topic — ${addSubTopic.name}`} onClose={() => setAddSubTopic(null)}>
-          <form onSubmit={handleAddSubtopic} className="space-y-4">
-            <Field label="Sub-topic name">
-              <input required autoFocus value={addSubName} onChange={e => setAddSubName(e.target.value)} placeholder="e.g. Navigation Charts" className={cx(inp, 'form-input')}/>
-            </Field>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button testId="btn-cancel-add-subtopic" variant="quiet" onClick={() => setAddSubTopic(null)}>Cancel</Button>
-              <Button testId="btn-save-add-subtopic" type="submit">Add Sub-topic</Button>
-            </div>
-          </form>
-        </Modal>
-      )}
+    </div>
+  );
+}
 
-      {/* Edit Sub-topic modal */}
-      {editSub && (
-        <Modal title="Edit Sub-topic" onClose={() => setEditSub(null)}>
-          <form onSubmit={handleEditSubSave} className="space-y-4">
-            <Field label="Sub-topic name">
-              <input required autoFocus value={editSubName} onChange={e => setEditSubName(e.target.value)} className={cx(inp, 'form-input')}/>
-            </Field>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button testId="btn-cancel-edit-subtopic" variant="quiet" onClick={() => setEditSub(null)}>Cancel</Button>
-              <Button testId="btn-save-edit-subtopic" type="submit">Save</Button>
+// ─── SubTopicPage — dedicated page showing resources for one sub-topic ──────────
+function SubTopicPage() {
+  const { courseId = '', topicId = '', subtopicId = '' } = useParams<{ courseId: string; topicId: string; subtopicId: string }>();
+  const [, navigate] = useLocation();
+  const [subtopic, setSubtopic] = useState<CourseTopicSubtopic | null>(null);
+  const [topicName, setTopicName] = useState('');
+  const [courseName, setCourseName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!courseId || !topicId || !subtopicId) return;
+    (async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const [topics, courses] = await Promise.all([
+          apiFetch<CourseTopic[]>(`/curriculum/courses/${courseId}/topics`),
+          apiFetch<Array<{ id: string; name: string }>>('/curriculum/list'),
+        ]);
+        const topic = topics.find(t => t.id === topicId);
+        const sub = topic?.subtopics.find(s => s.id === subtopicId) ?? null;
+        setSubtopic(sub);
+        setTopicName(topic?.name ?? '');
+        setCourseName(courses.find(c => c.id === courseId)?.name ?? '');
+        if (!sub) setError('Sub-topic not found');
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [courseId, topicId, subtopicId]);
+
+  const activities = subtopic?.activities ?? [];
+
+  return (
+    <div className="-mx-5 -my-7 min-h-[calc(100vh-72px)] bg-[#eef1fb] lg:-mx-10 lg:-my-9">
+      <div className="space-y-4 p-5 sm:p-8 lg:p-10">
+        {/* Back to topic */}
+        <button
+          type="button"
+          onClick={() => navigate(`/curriculum/courses/${courseId}/topics/${topicId}`)}
+          className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
+        >
+          <ChevronLeft size={18} className="shrink-0"/>
+          <span className="truncate">{topicName || 'Topic'}</span>
+        </button>
+
+        {/* Header */}
+        <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-6">
+          <div className="flex items-center gap-3 mb-1">
+            <Layers size={20} className="text-primary"/>
+            <h1 className="text-xl font-bold text-gray-800">{subtopic?.name ?? 'Sub-topic'}</h1>
+          </div>
+          <p className="text-sm text-gray-500 ml-8">{courseName}{topicName ? ` · ${topicName}` : ''}</p>
+        </div>
+
+        {loading && <div className="rounded-xl bg-white border border-gray-100 py-16 text-center text-sm text-gray-400">Loading…</div>}
+        {!loading && error && <div className="rounded-xl bg-red-50 border border-red-100 p-5 text-sm text-red-600">{error}</div>}
+
+        {!loading && !error && subtopic && (
+          <div className="rounded-xl bg-white border border-gray-100 shadow-xs overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/60">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                Resources · {activities.length}
+              </p>
             </div>
-          </form>
-        </Modal>
-      )}
+            {activities.length === 0 ? (
+              <div className="py-16 text-center">
+                <Layers size={28} className="mx-auto mb-3 text-gray-200"/>
+                <p className="text-sm text-gray-400">No resources imported yet for this sub-topic.</p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {activities.map((a, idx) => {
+                  const icon = a.type === 'Video'
+                    ? <Video size={15} className="text-blue-400 shrink-0"/>
+                    : a.type === 'Document'
+                    ? <FileText size={15} className="text-amber-400 shrink-0"/>
+                    : <Layers size={15} className="text-gray-400 shrink-0"/>;
+                  const statusCx = a.status === 'ready'
+                    ? 'text-emerald-600 bg-emerald-50'
+                    : a.status === 'unavailable'
+                    ? 'text-red-500 bg-red-50'
+                    : 'text-amber-600 bg-amber-50';
+                  return (
+                    <li key={a.id} className="flex items-center gap-4 px-5 py-3.5">
+                      <span className="w-6 shrink-0 text-center text-xs font-medium text-gray-400">{idx + 1}</span>
+                      {icon}
+                      <span className="flex-1 text-sm text-gray-700">{a.title}</span>
+                      <span className="text-[10px] font-semibold uppercase text-gray-400 bg-gray-100 px-2 py-0.5 rounded shrink-0">{a.type || '—'}</span>
+                      <span className={cx('text-[10px] font-semibold capitalize px-2 py-0.5 rounded shrink-0', statusCx)}>{a.status}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -4449,7 +4490,7 @@ function LearnerSignUpPage() {
   const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
   return <div className="grid min-h-[100dvh] place-items-center bg-muted/40 px-4"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div>;
 }
-function AppRoutes() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/settings" component={SettingsPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId" component={TopicWorkspacePage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
+function AppRoutes() { return <Shell><RoutedErrorBoundary><Switch><Route path="/" component={DashboardPage} /><Route path="/settings" component={SettingsPage} /><Route path="/curriculum/groups" component={CurriculumGroupsPage} /><Route path="/curriculum/topics" component={CurriculumTopicsPage} /><Route path="/curriculum/contents" component={CurriculumContentsPage} /><Route path="/curriculum/tags" component={CurriculumTagsPage} /><Route path="/curriculum/glossary" component={CurriculumGlossaryPage} /><Route path="/curriculum/upload-status" component={CurriculumUploadStatusPage} /><Route path="/curriculum/others" component={CurriculumOthersPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId/subtopics/:subtopicId" component={SubTopicPage} /><Route path="/curriculum/courses/:courseId/topics/:topicId" component={TopicWorkspacePage} /><Route path="/curriculum/courses/:id/structure" component={CourseStructurePage} /><Route path="/curriculum/courses/structure" component={CourseOBEPage} /><Route path="/curriculum/courses" component={CurriculumCoursesPage} /><Route path="/curriculum" component={CurriculumPage} /><Route path="/courses" component={CoursesPage} /><Route path="/learning-path" component={CoursesPage} /><Route path="/courses/:courseId" component={CourseDetailPage} /><Route path="/assignments" component={AssignmentsPage} /><Route path="/sessions" component={SessionsPage} /><Route path="/certificates" component={CertificatesPage} /><Route path="/analytics" component={AnalyticsPage} /><Route path="/users" component={UsersPage} /><Route component={NotFound} /></Switch></RoutedErrorBoundary></Shell>; }
 function AppRouter() { return <Switch><Route path="/sign-in/*?" component={LearnerSignInPage} /><Route path="/sign-up/*?" component={LearnerSignUpPage} /><Route component={AppRoutes} /></Switch>; }
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
