@@ -497,14 +497,22 @@ function TopicBlock({ topic, index, open, onToggle }: { topic: Topic; index: num
   </div>;
 }
 function SubtopicBlock({ subtopic, index }: { subtopic: Subtopic; index: number }) {
+  const [open, setOpen] = useState(false);
+  const count = subtopic.activities.length;
   return <div data-testid={`subtopic-${subtopic.id}`} className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
-    <div className="flex items-start gap-3 border-b border-border bg-muted/40 px-3 py-3">
-      <span className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-primary">Sub-topic {String(index + 1).padStart(2, '0')}</span>
+    <button
+      data-testid={`button-subtopic-${subtopic.id}`}
+      onClick={() => setOpen(o => !o)}
+      className="flex w-full items-center gap-3 px-3 py-3 text-left hover:bg-muted/60"
+    >
+      <span className="mt-0.5 shrink-0 text-[10px] font-bold uppercase tracking-wider text-primary">Sub-topic {String(index + 1).padStart(2, '0')}</span>
       <h4 className="min-w-0 flex-1 text-xs font-bold leading-relaxed">{subtopic.title}</h4>
-    </div>
-    {subtopic.activities.length > 0
-      ? <div className="p-1">{subtopic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>
-      : <p className="px-3 py-3 text-xs text-muted-foreground">No learning resources have been migrated for this sub-topic yet.</p>}
+      <span className="shrink-0 text-[10px] font-semibold text-muted-foreground">{count} {count === 1 ? 'item' : 'items'}</span>
+      <ChevronDown size={14} className={cx('shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
+    </button>
+    {open && (count > 0
+      ? <div className="border-t border-border p-1">{subtopic.activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>
+      : <p className="border-t border-border px-3 py-3 text-xs text-muted-foreground">No learning resources have been migrated for this sub-topic yet.</p>)}
   </div>;
 }
 function ActivityRow({ activity }: { activity: ActivityType }) {
