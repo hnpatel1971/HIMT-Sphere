@@ -335,7 +335,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       />
     );
   } else if (blobUrl) {
-    viewer = <iframe src={blobUrl} className="h-full w-full border-0 bg-white" />;
+    viewer = <iframe src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0`} className="h-full w-full border-0 bg-white" />;
   } else {
     viewer = null;
   }
