@@ -2846,52 +2846,152 @@ function CourseStructurePage() {
 function SubTopicPage() {
   const { courseId = '', topicId = '', subtopicId = '' } = useParams<{ courseId: string; topicId: string; subtopicId: string }>();
   const [, navigate] = useLocation();
-  const [subtopic, setSubtopic] = useState<CourseTopicSubtopic | null>(null);
-  const [topicName, setTopicName] = useState('');
+  const { toast } = useToast();
+
+  const [subtopic,   setSubtopic]   = useState<CourseTopicSubtopic | null>(null);
+  const [topicName,  setTopicName]  = useState('');
   const [courseName, setCourseName] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
+
+  // Admin state
+  const [isAdmin,    setIsAdmin]    = useState<boolean | null>(null);
+  const [showLogin,  setShowLogin]  = useState(false);
+  const [loginUser,  setLoginUser]  = useState('');
+  const [loginPass,  setLoginPass]  = useState('');
+  const [loginBusy,  setLoginBusy]  = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
+  // Rename modal
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState('');
 
   useEffect(() => {
+    apiFetch<{ isAdmin: boolean }>('/auth/status')
+      .then(r => setIsAdmin(r.isAdmin))
+      .catch(() => setIsAdmin(false));
+  }, []);
+
+  async function load() {
     if (!courseId || !topicId || !subtopicId) return;
-    (async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const [topics, courses] = await Promise.all([
-          apiFetch<CourseTopic[]>(`/curriculum/courses/${courseId}/topics`),
-          apiFetch<Array<{ id: string; name: string }>>('/curriculum/list'),
-        ]);
-        const topic = topics.find(t => t.id === topicId);
-        const sub = topic?.subtopics.find(s => s.id === subtopicId) ?? null;
-        setSubtopic(sub);
-        setTopicName(topic?.name ?? '');
-        setCourseName(courses.find(c => c.id === courseId)?.name ?? '');
-        if (!sub) setError('Sub-topic not found');
-      } catch (err) {
-        setError(String(err));
-      } finally {
-        setLoading(false);
+    setLoading(true);
+    setError('');
+    try {
+      const [topics, courses] = await Promise.all([
+        apiFetch<CourseTopic[]>(`/curriculum/courses/${courseId}/topics`),
+        apiFetch<Array<{ id: string; name: string }>>('/curriculum/list'),
+      ]);
+      const topic = topics.find(t => t.id === topicId);
+      const sub = topic?.subtopics.find(s => s.id === subtopicId) ?? null;
+      setSubtopic(sub);
+      setTopicName(topic?.name ?? '');
+      setCourseName(courses.find(c => c.id === courseId)?.name ?? '');
+      if (!sub) setError('Sub-topic not found');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void load(); }, [courseId, topicId, subtopicId]);
+
+  function requireAdminThen(action: () => void) {
+    if (isAdmin) { action(); return; }
+    setPendingAction(() => action);
+    setShowLogin(true);
+  }
+
+  async function handleAdminLogin(e: FormEvent) {
+    e.preventDefault();
+    setLoginBusy(true);
+    setLoginError('');
+    try {
+      await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
+      setIsAdmin(true);
+      setShowLogin(false);
+      setLoginUser(''); setLoginPass('');
+      if (pendingAction) {
+        const fn = pendingAction;
+        setPendingAction(null);
+        fn();
       }
-    })();
-  }, [courseId, topicId, subtopicId]);
+    } catch (err) {
+      setLoginError(String(err).replace(/^Error:\s*/, ''));
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  function handleAdminError(err: unknown) {
+    const msg = String(err);
+    if (msg.includes('401') || msg.includes('Unauthorized')) {
+      setIsAdmin(false); setShowLogin(true);
+    } else {
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
+    }
+  }
+
+  async function handleRename(e: FormEvent) {
+    e.preventDefault();
+    if (!subtopic || !editName.trim()) return;
+    try {
+      await apiFetch(`/curriculum/subtopics/${subtopic.id}`, 'PATCH', { name: editName.trim() });
+      setEditOpen(false);
+      await load();
+      toast({ title: 'Sub-topic renamed' });
+    } catch (err) { handleAdminError(err); }
+  }
+
+  async function handleDelete() {
+    if (!subtopic) return;
+    if (!confirm(`Delete sub-topic "${subtopic.name}"? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/curriculum/subtopics/${subtopic.id}`, 'DELETE');
+      toast({ title: 'Sub-topic deleted' });
+      navigate(`/curriculum/courses/${courseId}/topics/${topicId}`);
+    } catch (err) { handleAdminError(err); }
+  }
+
+  const tbBtn = (label: string, icon: ReactNode, onClick: () => void, disabled = false) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cx(
+        'inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-xs transition-colors',
+        disabled ? 'cursor-not-allowed text-gray-300' : 'hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900',
+      )}
+    >{icon}{label}</button>
+  );
 
   const activities = subtopic?.activities ?? [];
 
   return (
     <div className="-mx-5 -my-7 min-h-[calc(100vh-72px)] bg-[#eef1fb] lg:-mx-10 lg:-my-9">
       <div className="space-y-4 p-5 sm:p-8 lg:p-10">
-        {/* Back to topic */}
-        <button
-          type="button"
-          onClick={() => navigate(`/curriculum/courses/${courseId}/topics/${topicId}`)}
-          className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
-        >
-          <ChevronLeft size={18} className="shrink-0"/>
-          <span className="truncate">{topicName || 'Topic'}</span>
-        </button>
 
-        {/* Header */}
+        {/* Breadcrumb + toolbar row — always visible; actions gate on admin */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => navigate(`/curriculum/courses/${courseId}/topics/${topicId}`)}
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
+          >
+            <ChevronLeft size={18} className="shrink-0"/>
+            <span className="truncate">{topicName || 'Topic'}</span>
+          </button>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            {tbBtn('Edit', <Pencil size={13}/>, () => requireAdminThen(() => {
+              setEditName(subtopic?.name ?? '');
+              setEditOpen(true);
+            }))}
+            {tbBtn('Delete', <Trash2 size={13}/>, () => requireAdminThen(handleDelete))}
+          </div>
+        </div>
+
+        {/* Header card */}
         <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-6">
           <div className="flex items-center gap-3 mb-1">
             <Layers size={20} className="text-primary"/>
@@ -2961,6 +3061,41 @@ function SubTopicPage() {
           </div>
         )}
       </div>
+
+      {/* Rename modal */}
+      {editOpen && subtopic && (
+        <Modal title="Rename Sub-topic" onClose={() => setEditOpen(false)}>
+          <form onSubmit={handleRename} className="space-y-4">
+            <Field label="Sub-topic name">
+              <input required autoFocus value={editName} onChange={e => setEditName(e.target.value)} className="form-input"/>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button testId="button-cancel-subtopic-rename" variant="quiet" onClick={() => setEditOpen(false)}>Cancel</Button>
+              <Button testId="button-save-subtopic-rename" type="submit">Save</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Admin login modal */}
+      {showLogin && (
+        <Modal title="Admin login" onClose={() => { setShowLogin(false); setPendingAction(null); setLoginError(''); }}>
+          <p className="mb-4 text-sm text-gray-500">Enter your LMS admin credentials to manage this sub-topic.</p>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <Field label="Username">
+              <input required autoFocus value={loginUser} onChange={e => setLoginUser(e.target.value)} placeholder="admin" className="form-input" autoComplete="username"/>
+            </Field>
+            <Field label="Password">
+              <input required type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)} className="form-input" autoComplete="current-password"/>
+            </Field>
+            {loginError && <p className="text-sm text-red-600">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button testId="button-cancel-subtopic-login" variant="quiet" onClick={() => { setShowLogin(false); setPendingAction(null); setLoginError(''); }}>Cancel</Button>
+              <Button testId="button-submit-subtopic-login" type="submit" disabled={loginBusy}>{loginBusy ? 'Signing in…' : 'Sign in'}</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 }

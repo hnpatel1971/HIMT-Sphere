@@ -1452,6 +1452,9 @@ async function loginToTriByteShared(tbUser: string, tbPass: string): Promise<str
   const body = new URLSearchParams({
     name: tbUser, pass: tbPass,
     form_build_id: formBuildId, form_id: "user_login", op: "Log in",
+    // TriByte's setFormSecureToken() copies form_build_id into the st field
+    // before submission; include it so server-side validation passes.
+    st: formBuildId,
   });
   const loginRes = await fetch(`${TB_BASE_URL}/user/login?destination=reviewer/course/list`, {
     method:   "POST",
