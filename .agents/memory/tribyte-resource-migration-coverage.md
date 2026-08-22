@@ -40,3 +40,11 @@ TriByte resource migrations have **no application-level size ceiling**. File siz
 **Why:** Some records expose only an empty thumbnail/upload field and administrative controls, while others place their playable URL in a form field. Only a scan that finds neither is a verified empty source.
 
 **How to apply:** Report empty-source nodes separately from pending or failed transfers, and keep the parent topic/sub-topic visible even when its resource list is empty.
+
+## Preview links are source hints
+
+**Rule:** Associate an authenticated Preview link with its matching content-record ID, but synthesize a Preview-only video only when that record exposes no direct resource of any type and has video-specific evidence.
+
+**Why:** TriByte can show a generic Preview button and generic video-edit controls on document records that already expose a valid PDF. Treating those controls as a second asset creates false learner videos.
+
+**How to apply:** Parse the sub-topic Contents page for Preview `vid` values, carry the matching URL into the final content-record scan, prefer any direct document/media source found there, and use Preview-only recovery solely for otherwise empty video records.

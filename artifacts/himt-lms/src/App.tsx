@@ -1484,11 +1484,12 @@ function CurriculumCoursesPage() {
   };
   type ResourceImportItem = {
     id: string; courseId: string; courseName: string; status: string;
-    discoveredResources: number; importedResources: number; failedResources: number; error: string | null; attempts: number;
+    discoveredResources: number; importedResources: number; failedResources: number;
+    unavailableResources: number; error: string | null; attempts: number;
   };
   type ResourceImportJob = {
     id: string; status: string; totalCourses: number; completedCourses: number;
-    importedResources: number; failedResources: number; currentCourseId: string | null;
+    importedResources: number; failedResources: number; unavailableResources: number; currentCourseId: string | null;
     currentCourseName: string | null; cancelRequested: boolean; items: ResourceImportItem[];
   };
   const TB_BASE = "https://admin.learn.himtelearning.com";
@@ -1763,7 +1764,11 @@ function CurriculumCoursesPage() {
   const pendingBulkCourseCount = bulkJob?.items.filter(item => ["pending", "running"].includes(item.status)).length ?? 0;
   const retryableBulkCourseCount = pendingBulkCourseCount + (bulkJob?.failedCourses ?? 0);
   const pendingResourceCourseCount = resourceJob?.items.filter(item => ["pending", "running"].includes(item.status)).length ?? 0;
-  const retryableResourceCourseCount = pendingResourceCourseCount + (resourceJob?.items.filter(item => item.status === "failed").length ?? 0);
+  const retryableResourceCourseCount = pendingResourceCourseCount + (
+    resourceJob?.items.filter(item =>
+      item.status === "failed" || item.status === "completed_with_unavailable"
+    ).length ?? 0
+  );
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   function toggleSelect(id: string) {
@@ -1836,9 +1841,66 @@ function CurriculumCoursesPage() {
               <Trash2 size={13}/> Delete
             </button>
             <button onClick={() => setShowImport(true)} className={btn}><FileUp size={13}/> Import</button>
-
+            <button
+              data-testid="button-import-learning-resources"
+              onClick={openResourceImport}
+              disabled={startingResourceImport || resourceJob?.status === 'queued' || resourceJob?.status === 'running'}
+              className={cx(
+                btn,
+                (startingResourceImport || resourceJob?.status === 'queued' || resourceJob?.status === 'running')
+                  && 'cursor-not-allowed opacity-50',
+              )}
+            >
+              <Download size={13}/>
+              {startingResourceImport ? 'Starting…' : 'Import learning resources'}
+            </button>
           </div>
         </div>
+
+        {resourceJob && (
+          <div data-testid="resource-import-status" className="rounded-xl border border-primary/15 bg-white p-4 shadow-xs">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-gray-800">Learning resource import</p>
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary">
+                    {resourceJob.status.replaceAll('_', ' ')}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  {resourceJob.completedCourses} of {resourceJob.totalCourses} courses checked
+                  {' · '}{resourceJob.importedResources} transferred
+                  {' · '}{resourceJob.unavailableResources} unavailable
+                  {' · '}{resourceJob.failedResources} failed
+                </p>
+                {resourceJob.currentCourseName && (
+                  <p className="mt-1 text-xs font-medium text-gray-600">Checking {resourceJob.currentCourseName}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {['queued', 'running'].includes(resourceJob.status) && (
+                  <Button testId="button-cancel-resource-import" variant="quiet" onClick={cancelResourceImport}>
+                    Stop after current course
+                  </Button>
+                )}
+                {!['queued', 'running'].includes(resourceJob.status) && retryableResourceCourseCount > 0 && (
+                  <Button testId="button-retry-resource-import" variant="quiet" onClick={retryResourceImport}>
+                    <RefreshCw size={13}/> Retry unavailable or failed
+                  </Button>
+                )}
+              </div>
+            </div>
+            {resourceJob.items.some(item => item.error) && (
+              <div className="mt-3 space-y-1 border-t border-gray-100 pt-3">
+                {resourceJob.items.filter(item => item.error).slice(0, 5).map(item => (
+                  <p key={item.id} className="text-xs text-gray-500">
+                    <span className="font-semibold text-gray-700">{item.courseName}:</span> {item.error}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Filter card */}
         <div className="rounded-xl bg-white border border-gray-100 shadow-xs p-5">

@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseTriByteResources } from "./tribyte-resource-parser.ts";
+import {
+  isTriByteVideoContentRecord,
+  parseTriBytePreviewLinks,
+  parseTriBytePreviewPlaylists,
+  parseTriByteResources,
+} from "./tribyte-resource-parser.ts";
+import {
+  isApprovedTriByteHlsUrl,
+  rewriteHlsManifest,
+  shouldMarkTriByteResourceUnavailable,
+  triByteHlsRequestHeaders,
+} from "./tribyte-hls.ts";
 
 test("keeps course files and trusted video hosts", () => {
   const resources = parseTriByteResources(`
@@ -63,4 +74,117 @@ test("classifies a Publitas URL in a final content form field as Document, not V
     resourceType: "Document",
     fileName: "refresher-for-medical-first-aid",
   }]);
+});
+
+test("extracts content-specific Preview links without treating them as learner resources", () => {
+  const html = `
+    <a class="preview" href="/video?vid=428318&amp;dialog=true&amp;width=640">Preview the Content</a>
+    <a href="/reviewer/topics?cat=19186">Online class video</a>
+  `;
+
+  assert.deepEqual(parseTriBytePreviewLinks(
+    html,
+    "https://admin.learn.himtelearning.com/node/428024/edit/contents",
+  ), [{
+    sourceNid: "428318",
+    previewUrl: "https://admin.learn.himtelearning.com/video?vid=428318&dialog=true&width=640",
+  }]);
+  assert.deepEqual(parseTriByteResources(
+    html,
+    "https://admin.learn.himtelearning.com/node/428024/edit/contents",
+  ), []);
+});
+
+test("extracts HTML-encoded and JSON-escaped HLS playlists from Preview markup", () => {
+  const playlists = parseTriBytePreviewPlaylists(`
+    <script>
+      PlayerManager.load({"playerUrl":"https:\\/\\/d2ubwtvhjzuzf0.cloudfront.net\\/428318\\/master.m3u8?policy=example\\u0026key=one"});
+    </script>
+    <source src="/streams/fallback.m3u8?token=example&amp;quality=auto">
+  `, "https://admin.learn.himtelearning.com/video?vid=428318");
+
+  assert.deepEqual(playlists, [
+    "https://d2ubwtvhjzuzf0.cloudfront.net/428318/master.m3u8?policy=example&key=one",
+    "https://admin.learn.himtelearning.com/streams/fallback.m3u8?token=example&quality=auto",
+  ]);
+});
+
+test("requires video-specific content evidence before using a Preview-only source", () => {
+  assert.equal(isTriByteVideoContentRecord(`
+    <a href="/node/428318/edit/video/clipper">Edit video clipping</a>
+    <a href="/reviewer/download/clipping?nid=428318">Download</a>
+  `), true);
+  assert.equal(isTriByteVideoContentRecord(`
+    <a href="/video?vid=428319&amp;dialog=true">Preview the Content</a>
+    <input name="document_upload" value="safety-checklist.pdf">
+  `), false);
+});
+
+test("rewrites all HLS child requests through an approved local proxy", () => {
+  let nextId = 0;
+  const registered: string[] = [];
+  const rewritten = rewriteHlsManifest(`
+#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="keys/key.bin"
+#EXT-X-MAP:URI=https://d2ubwtvhjzuzf0.cloudfront.net/video/init.mp4
+segments/part-1.ts
+`, "https://admin.learn.himtelearning.com/streams/master.m3u8", (url) => {
+    assert.equal(isApprovedTriByteHlsUrl(url), true);
+    registered.push(url);
+    return `http://127.0.0.1:43210/hls/${++nextId}`;
+  });
+
+  assert.deepEqual(registered, [
+    "https://admin.learn.himtelearning.com/streams/keys/key.bin",
+    "https://d2ubwtvhjzuzf0.cloudfront.net/video/init.mp4",
+    "https://admin.learn.himtelearning.com/streams/segments/part-1.ts",
+  ]);
+  assert.equal(rewritten.includes("https://"), false);
+  assert.equal(rewritten.includes("http://127.0.0.1:43210/hls/3"), true);
+});
+
+test("rejects hostile HLS children and never sends the TriByte cookie cross-origin", () => {
+  assert.throws(() => rewriteHlsManifest(
+    "#EXTM3U\nhttps://evil.example/segment.ts",
+    "https://admin.learn.himtelearning.com/streams/master.m3u8",
+    (url) => {
+      if (!isApprovedTriByteHlsUrl(url)) throw new Error("blocked");
+      return "http://127.0.0.1/hls/1";
+    },
+  ), /blocked/);
+
+  assert.equal(
+    triByteHlsRequestHeaders(
+      "https://admin.learn.himtelearning.com/streams/master.m3u8",
+      "session=secret",
+      "https://admin.learn.himtelearning.com/video?vid=1",
+    ).Cookie,
+    "session=secret",
+  );
+  assert.equal(
+    triByteHlsRequestHeaders(
+      "https://d2ubwtvhjzuzf0.cloudfront.net/video/segment.ts",
+      "session=secret",
+      "https://admin.learn.himtelearning.com/video?vid=1",
+    ).Cookie,
+    undefined,
+  );
+});
+
+test("marks direct and Preview terminal absence unavailable, not retryable failed", () => {
+  assert.equal(shouldMarkTriByteResourceUnavailable(
+    new Error("Source file responded 404"),
+    new Error("TriByte page responded 410"),
+    false,
+  ), true);
+  assert.equal(shouldMarkTriByteResourceUnavailable(
+    new Error("Source file responded 404"),
+    new Error("Preview playlist responded 503"),
+    false,
+  ), false);
+  assert.equal(shouldMarkTriByteResourceUnavailable(
+    new Error("No direct source"),
+    new Error("Preview HLS child responded 404"),
+    true,
+  ), true);
 });

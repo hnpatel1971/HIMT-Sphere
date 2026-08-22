@@ -298,9 +298,10 @@ export const courseResources = pgTable("course_resources", {
   // Training recordings can exceed PostgreSQL's 2 GB integer limit.
   sizeBytes:       bigint("size_bytes", { mode: "number" }),
   order:           integer("order").default(0),
-  status:          text("status").notNull().default("pending"), // pending | ready | failed | unsupported
+  status:          text("status").notNull().default("pending"), // pending | ready | failed | unavailable | unsupported
   storagePath:     text("storage_path"),               // /objects/… path in App Storage
   checksum:        text("checksum"),
+  recoveryMethod:  text("recovery_method"),            // download | preview_hls | external_reference | storage_resume
   error:           text("error"),
   createdAt:       timestamp("created_at").defaultNow().notNull(),
   updatedAt:       timestamp("updated_at").defaultNow().notNull(),
@@ -313,6 +314,7 @@ export const courseResourceImportJobs = pgTable("course_resource_import_jobs", {
   completedCourses:  integer("completed_courses").notNull().default(0),
   importedResources: integer("imported_resources").notNull().default(0),
   failedResources:   integer("failed_resources").notNull().default(0),
+  unavailableResources: integer("unavailable_resources").notNull().default(0),
   currentCourseId:   text("current_course_id"),
   currentCourseName: text("current_course_name"),
   cancelRequested:   boolean("cancel_requested").notNull().default(false),
@@ -331,6 +333,7 @@ export const courseResourceImportJobItems = pgTable("course_resource_import_job_
   discoveredResources:integer("discovered_resources").notNull().default(0),
   importedResources:  integer("imported_resources").notNull().default(0),
   failedResources:    integer("failed_resources").notNull().default(0),
+  unavailableResources: integer("unavailable_resources").notNull().default(0),
   error:              text("error"),
   attempts:           integer("attempts").notNull().default(0),
   startedAt:          timestamp("started_at"),

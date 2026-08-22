@@ -81,3 +81,8 @@ export async function getStoredResource(objectPath: string): Promise<File> {
   if (!exists) throw new Error("Stored resource does not exist");
   return file;
 }
+
+export async function deleteStoredResource(objectPath: string): Promise<void> {
+  const file = gcsFileForObjectPath(objectPath);
+  await file.delete({ ignoreNotFound: true });
+}

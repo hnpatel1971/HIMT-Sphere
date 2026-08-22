@@ -7,6 +7,11 @@ export type ParsedTriByteResource = {
   fileName: string;
 };
 
+export type ParsedTriBytePreview = {
+  sourceNid: string;
+  previewUrl: string;
+};
+
 const FILE_EXTENSION = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|rtf|zip|rar|7z|scorm|mp4|m4v|mov|webm|avi|mp3|wav|m4a|ogg)(?:[?#].*)?$/i;
 const DOCUMENT_EXTENSION = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|rtf)(?:[?#].*)?$/i;
 const RECORDING_EXTENSION = /\.(mp4|m4v|mov|webm|avi|mp3|wav|m4a|ogg)(?:[?#].*)?$/i;
@@ -69,6 +74,21 @@ function toAbsoluteUrl(rawUrl: string, baseUrl: string): string | null {
     // The admin-only download link includes the authenticated user's email.
     // The server-side session is sufficient, so do not persist that PII.
     url.searchParams.delete("uname");
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function toAbsoluteMediaUrl(rawUrl: string, baseUrl: string): string | null {
+  try {
+    const normalized = decodeHtml(rawUrl)
+      .replace(/\\u0026/gi, "&")
+      .replace(/\\\//g, "/")
+      .trim();
+    const url = new URL(normalized, baseUrl);
+    if (!/^https?:$/i.test(url.protocol)) return null;
+    url.hash = "";
     return url.href;
   } catch {
     return null;
@@ -151,4 +171,73 @@ export function parseTriByteResources(html: string, baseUrl: string): ParsedTriB
   }
 
   return resources;
+}
+
+/**
+ * Extract the authenticated Preview player links shown beside individual
+ * content records on a TriByte sub-topic's Contents page.
+ */
+export function parseTriBytePreviewLinks(html: string, baseUrl: string): ParsedTriBytePreview[] {
+  const previews: ParsedTriBytePreview[] = [];
+  const seen = new Set<string>();
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let anchor: RegExpExecArray | null;
+  while ((anchor = anchorPattern.exec(html)) !== null) {
+    const href = anchor[1].match(/\bhref\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (!href) continue;
+    const previewUrl = toAbsoluteMediaUrl(href, baseUrl);
+    if (!previewUrl) continue;
+    const base = new URL(baseUrl);
+    const parsed = new URL(previewUrl);
+    const sourceNid = parsed.searchParams.get("vid") ?? "";
+    if (
+      parsed.origin !== base.origin
+      || parsed.pathname !== "/video"
+      || !/^\d+$/.test(sourceNid)
+      || seen.has(sourceNid)
+    ) continue;
+    seen.add(sourceNid);
+    previews.push({ sourceNid, previewUrl });
+  }
+  return previews;
+}
+
+/**
+ * Extract HLS playlists embedded in TriByte's authenticated Preview response.
+ * Player configuration is emitted inconsistently as HTML, JavaScript, and
+ * JSON-escaped strings, so normalize those representations before matching.
+ */
+export function parseTriBytePreviewPlaylists(html: string, baseUrl: string): string[] {
+  const normalized = decodeHtml(html)
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\\//g, "/");
+  const playlists: string[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: string) => {
+    if (!/\.m3u8(?:[?#]|$)/i.test(candidate)) return;
+    const playlistUrl = toAbsoluteMediaUrl(candidate, baseUrl);
+    if (!playlistUrl || seen.has(playlistUrl)) return;
+    seen.add(playlistUrl);
+    playlists.push(playlistUrl);
+  };
+
+  const quotedPattern = /["']([^"'<>]*?\.m3u8(?:\?[^"'<>]*)?)["']/gi;
+  let quoted: RegExpExecArray | null;
+  while ((quoted = quotedPattern.exec(normalized)) !== null) add(quoted[1]);
+
+  const unquotedPattern = /(?:https?:\/\/|\/\/|\/)[^\s"'<>]+?\.m3u8(?:\?[^\s"'<>]*)?/gi;
+  let unquoted: RegExpExecArray | null;
+  while ((unquoted = unquotedPattern.exec(normalized)) !== null) add(unquoted[0]);
+
+  return playlists;
+}
+
+export function isTriByteVideoContentRecord(html: string): boolean {
+  const normalized = decodeHtml(html);
+  return [
+    /\/node\/\d+\/edit\/video\/clipper(?:[/?#"']|$)/i,
+    /\/node\/\d+\/edit\/clippingindex(?:[/?#"']|$)/i,
+    /\/reviewer\/download\/clipping\?[^"'<>]*\bnid=\d+/i,
+    /\b(?:name|id)\s*=\s*["'][^"']*(?:resource[_-]?type|content[_-]?type)[^"']*["'][^>]*\bvalue\s*=\s*["'](?:video|recording)["']/i,
+  ].some(pattern => pattern.test(normalized));
 }
