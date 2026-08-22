@@ -6,16 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface ImportResult {
+export interface UserImportAudit {
   id: string;
+  source: string;
   filename: string;
-  status: string;
   total: number;
-  valid: number;
-  warnings: number;
+  added: number;
+  updated: number;
   failed: number;
-  progress: number;
-  added?: number;
-  updated?: number;
-  messages?: string[];
+  warnings: string[];
+  createdAt: string;
 }

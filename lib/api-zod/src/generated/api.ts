@@ -179,10 +179,7 @@ export const GetCourseResponse = zod.object({
   "status": zod.string(),
   "protected": zod.boolean(),
   "resourceId": zod.string().nullable(),
-  "openUrl": zod.string().nullable(),
-  "sourceUrl": zod.string().nullable().optional(),
-  "mimeType": zod.string().nullable().optional(),
-  "hasStoredFile": zod.boolean().optional()
+  "openUrl": zod.string().nullable()
 })),
   "subtopics": zod.array(zod.object({
   "id": zod.string(),
@@ -195,10 +192,7 @@ export const GetCourseResponse = zod.object({
   "status": zod.string(),
   "protected": zod.boolean(),
   "resourceId": zod.string().nullable(),
-  "openUrl": zod.string().nullable(),
-  "sourceUrl": zod.string().nullable().optional(),
-  "mimeType": zod.string().nullable().optional(),
-  "hasStoredFile": zod.boolean().optional()
+  "openUrl": zod.string().nullable()
 }))
 }))
 }))
@@ -318,20 +312,53 @@ export const GetAnalyticsOverviewResponse = zod.object({
 /**
  * @summary List users
  */
+export const ListUsersQueryParams = zod.object({
+  "search": zod.coerce.string().optional(),
+  "role": zod.enum(['Admin', 'Faculty', 'Learner']).optional(),
+  "group": zod.coerce.string().optional(),
+  "status": zod.enum(['Active', 'Pending', 'Invited', 'Suspended']).optional()
+})
+
 export const ListUsersResponseItem = zod.object({
   "id": zod.string(),
   "name": zod.string(),
   "email": zod.string(),
-  "role": zod.string(),
+  "role": zod.enum(['Admin', 'Faculty', 'Learner']),
   "group": zod.string(),
-  "status": zod.string(),
+  "status": zod.enum(['Active', 'Pending', 'Invited', 'Suspended']),
   "lastActivity": zod.string()
 })
 export const ListUsersResponse = zod.array(ListUsersResponseItem)
 
 
 /**
- * @summary Update a user's group
+ * @summary Create a directory user and send a Clerk invitation
+ */
+
+
+
+export const CreateUserBody = zod.object({
+  "name": zod.string().min(1),
+  "email": zod.string(),
+  "role": zod.enum(['Admin', 'Faculty', 'Learner']),
+  "group": zod.string()
+})
+
+export const CreateUserResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.enum(['Admin', 'Faculty', 'Learner']),
+  "group": zod.string(),
+  "status": zod.enum(['Active', 'Pending', 'Invited', 'Suspended']),
+  "lastActivity": zod.string(),
+  "invitationSent": zod.boolean(),
+  "accountExists": zod.boolean()
+})
+
+
+/**
+ * @summary Update a user's directory profile and access state
  */
 export const UpdateUserGroupParams = zod.object({
   "userId": zod.coerce.string()
@@ -340,19 +367,98 @@ export const UpdateUserGroupParams = zod.object({
 
 
 
+
 export const UpdateUserGroupBody = zod.object({
-  "group": zod.string().min(1)
+  "name": zod.string().min(1).optional(),
+  "role": zod.enum(['Admin', 'Faculty', 'Learner']).optional(),
+  "group": zod.string().min(1).optional(),
+  "status": zod.enum(['Active', 'Pending', 'Invited', 'Suspended']).optional()
 })
 
 export const UpdateUserGroupResponse = zod.object({
   "id": zod.string(),
   "name": zod.string(),
   "email": zod.string(),
-  "role": zod.string(),
+  "role": zod.enum(['Admin', 'Faculty', 'Learner']),
   "group": zod.string(),
-  "status": zod.string(),
+  "status": zod.enum(['Active', 'Pending', 'Invited', 'Suspended']),
   "lastActivity": zod.string()
 })
+
+
+/**
+ * @summary Send Clerk invitations to all reviewed pending users
+ */
+export const InvitePendingUsersResponse = zod.object({
+  "total": zod.number(),
+  "sent": zod.number(),
+  "activated": zod.number(),
+  "failed": zod.number(),
+  "failures": zod.array(zod.object({
+  "userId": zod.string(),
+  "error": zod.string()
+}))
+})
+
+
+/**
+ * @summary Send or resend a Clerk invitation
+ */
+export const InviteUserParams = zod.object({
+  "userId": zod.coerce.string()
+})
+
+export const InviteUserResponse = zod.object({
+  "sent": zod.boolean(),
+  "accountExists": zod.boolean()
+})
+
+
+/**
+ * @summary List a user's course assignments
+ */
+export const ListUserEnrollmentsParams = zod.object({
+  "userId": zod.coerce.string()
+})
+
+export const ListUserEnrollmentsResponseItem = zod.object({
+  "courseId": zod.string()
+})
+export const ListUserEnrollmentsResponse = zod.array(ListUserEnrollmentsResponseItem)
+
+
+/**
+ * @summary Replace a user's course assignments in bulk
+ */
+export const ReplaceUserEnrollmentsParams = zod.object({
+  "userId": zod.coerce.string()
+})
+
+export const ReplaceUserEnrollmentsBody = zod.object({
+  "courseIds": zod.array(zod.string())
+})
+
+export const ReplaceUserEnrollmentsResponse = zod.object({
+  "userId": zod.string(),
+  "courseIds": zod.array(zod.string())
+})
+
+
+/**
+ * @summary List recent persistent user import audits
+ */
+export const ListUserImportsResponseItem = zod.object({
+  "id": zod.string(),
+  "source": zod.string(),
+  "filename": zod.string(),
+  "total": zod.number(),
+  "added": zod.number(),
+  "updated": zod.number(),
+  "failed": zod.number(),
+  "warnings": zod.array(zod.string()),
+  "createdAt": zod.string()
+})
+export const ListUserImportsResponse = zod.array(ListUserImportsResponseItem)
 
 
 /**
@@ -473,7 +579,13 @@ export const AddCourseOutcomeResponse = zod.object({
 
 export const ImportUsersBody = zod.object({
   "filename": zod.string(),
-  "rows": zod.number().min(1)
+  "rows": zod.array(zod.object({
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.enum(['Admin', 'Faculty', 'Learner']).optional(),
+  "group": zod.string().optional(),
+  "status": zod.enum(['Active', 'Pending', 'Invited', 'Suspended']).optional()
+})).min(1)
 })
 
 export const ImportUsersResponse = zod.object({
@@ -484,7 +596,10 @@ export const ImportUsersResponse = zod.object({
   "valid": zod.number(),
   "warnings": zod.number(),
   "failed": zod.number(),
-  "progress": zod.number()
+  "progress": zod.number(),
+  "added": zod.number().optional(),
+  "updated": zod.number().optional(),
+  "messages": zod.array(zod.string()).optional()
 })
 
 

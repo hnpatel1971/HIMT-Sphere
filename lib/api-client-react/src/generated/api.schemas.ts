@@ -125,25 +125,107 @@ export interface Certificate {
   serial: string;
 }
 
+export type UserRole = typeof UserRole[keyof typeof UserRole];
+
+
+export const UserRole = {
+  Admin: 'Admin',
+  Faculty: 'Faculty',
+  Learner: 'Learner',
+} as const;
+
+export type UserStatus = typeof UserStatus[keyof typeof UserStatus];
+
+
+export const UserStatus = {
+  Active: 'Active',
+  Pending: 'Pending',
+  Invited: 'Invited',
+  Suspended: 'Suspended',
+} as const;
+
 export interface User {
   id: string;
   name: string;
   email: string;
-  role: string;
+  role: UserRole;
   group: string;
-  status: string;
+  status: UserStatus;
   lastActivity: string;
 }
 
-export interface UserGroupUpdate {
+export interface UserCreate {
   /** @minLength 1 */
+  name: string;
+  email: string;
+  role: UserRole;
   group: string;
+}
+
+export interface UserUpdate {
+  /** @minLength 1 */
+  name?: string;
+  role?: UserRole;
+  /** @minLength 1 */
+  group?: string;
+  status?: UserStatus;
+}
+
+export interface UserCreateResult {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  group: string;
+  status: UserStatus;
+  lastActivity: string;
+  invitationSent: boolean;
+  accountExists: boolean;
+}
+
+export interface UserInvitationResult {
+  sent: boolean;
+  accountExists: boolean;
+}
+
+export interface BulkInvitationFailure {
+  userId: string;
+  error: string;
+}
+
+export interface BulkInvitationResult {
+  total: number;
+  sent: number;
+  activated: number;
+  failed: number;
+  failures: BulkInvitationFailure[];
+}
+
+export interface UserEnrollment {
+  courseId: string;
+}
+
+export interface UserEnrollmentUpdate {
+  courseIds: string[];
+}
+
+export interface UserEnrollmentResult {
+  userId: string;
+  courseIds: string[];
+}
+
+export interface UserImportRow {
+  name: string;
+  email: string;
+  role?: UserRole;
+  group?: string;
+  status?: UserStatus;
 }
 
 export interface UserImportInput {
   filename: string;
-  /** @minimum 1 */
-  rows: number;
+  /** @minItems 1 */
+  rows: UserImportRow[];
 }
 
 export interface ImportResult {
@@ -155,6 +237,21 @@ export interface ImportResult {
   warnings: number;
   failed: number;
   progress: number;
+  added?: number;
+  updated?: number;
+  messages?: string[];
+}
+
+export interface UserImportAudit {
+  id: string;
+  source: string;
+  filename: string;
+  total: number;
+  added: number;
+  updated: number;
+  failed: number;
+  warnings: string[];
+  createdAt: string;
 }
 
 export interface LearnerSummary {
@@ -276,5 +373,12 @@ search?: string;
 
 export type ListAssignmentsParams = {
 status?: string;
+};
+
+export type ListUsersParams = {
+search?: string;
+role?: UserRole;
+group?: string;
+status?: UserStatus;
 };
 

@@ -8,12 +8,9 @@
 import type { UserRole } from './userRole';
 import type { UserStatus } from './userStatus';
 
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  group: string;
-  status: UserStatus;
-  lastActivity: string;
-}
+export type ListUsersParams = {
+search?: string;
+role?: UserRole;
+group?: string;
+status?: UserStatus;
+};

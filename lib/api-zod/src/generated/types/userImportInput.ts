@@ -5,9 +5,10 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { UserImportRow } from './userImportRow';
 
 export interface UserImportInput {
   filename: string;
-  /** @minimum 1 */
-  rows: number;
+  /** @minItems 1 */
+  rows: UserImportRow[];
 }

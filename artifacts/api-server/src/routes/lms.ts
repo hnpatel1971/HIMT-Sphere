@@ -39,6 +39,8 @@ import {
   users as usersTable,
   learnerIdentities as learnerIdentitiesTable,
   learnerCourseAccess as learnerCourseAccessTable,
+  userCourseEnrollments as userCourseEnrollmentsTable,
+  userImportRuns as userImportRunsTable,
   programmes as programmesTable,
   programmeCourses as programmeCoursesTable,
   courseOutlines as courseOutlinesTable,
@@ -74,8 +76,6 @@ import {
   GetCurriculumCourseOutlineParams,
   GetCurriculumCourseOutlineResponse,
   GetDashboardResponse,
-  ImportUsersBody,
-  ImportUsersResponse,
   ListAssignmentsQueryParams,
   ListAssignmentsResponse,
   ListCertificatesResponse,
@@ -85,10 +85,6 @@ import {
   ListProgrammeCoursesResponse,
   ListProgrammesResponse,
   ListSessionsResponse,
-  ListUsersResponse,
-  UpdateUserGroupBody,
-  UpdateUserGroupParams,
-  UpdateUserGroupResponse,
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
@@ -489,6 +485,72 @@ export async function ensureAppSettingsTable() {
 }
 
 /**
+ * Ensure the admin user workspace can start against an older LMS database.
+ * These statements are idempotent so deployments do not need an interactive
+ * Drizzle schema push before directory imports and enrollments are available.
+ */
+export async function ensureUserWorkspaceTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_course_enrollments (
+      id         TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      course_id  TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_import_runs (
+      id         TEXT PRIMARY KEY,
+      source     TEXT NOT NULL,
+      filename   TEXT NOT NULL,
+      total      INTEGER NOT NULL,
+      added      INTEGER NOT NULL,
+      updated    INTEGER NOT NULL,
+      failed     INTEGER NOT NULL,
+      warnings   JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS user_course_enrollments_user_course_unique
+      ON user_course_enrollments (user_id, course_id)
+  `);
+
+  // Existing installations can contain legacy duplicate rows. Detect those
+  // before enforcing the new constraints: logging a remediation warning keeps
+  // the LMS available, and the constraint is applied automatically after data
+  // has been reconciled.
+  const enforceWhenClean = async (indexName: string, duplicateQuery: string, createIndex: string) => {
+    const duplicates = await pool.query(duplicateQuery);
+    if (duplicates.rowCount) {
+      logger.warn({ indexName }, "Skipping new unique index until legacy duplicate directory rows are reconciled");
+      return;
+    }
+    await pool.query(createIndex);
+  };
+  await enforceWhenClean(
+    "groups_name_lower_unique",
+    "SELECT 1 FROM groups GROUP BY LOWER(name) HAVING COUNT(*) > 1 LIMIT 1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS groups_name_lower_unique ON groups (LOWER(name))",
+  );
+  await enforceWhenClean(
+    "users_email_lower_unique",
+    "SELECT 1 FROM users GROUP BY LOWER(email) HAVING COUNT(*) > 1 LIMIT 1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_unique ON users (LOWER(email))",
+  );
+  await enforceWhenClean(
+    "learner_identities_user_id_unique",
+    "SELECT 1 FROM learner_identities GROUP BY user_id HAVING COUNT(*) > 1 LIMIT 1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS learner_identities_user_id_unique ON learner_identities (user_id)",
+  );
+  await enforceWhenClean(
+    "learner_course_access_identity_course_unique",
+    "SELECT 1 FROM learner_course_access GROUP BY clerk_user_id, course_id HAVING COUNT(*) > 1 LIMIT 1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS learner_course_access_identity_course_unique ON learner_course_access (clerk_user_id, course_id)",
+  );
+}
+
+/**
  * Ensure DRM audit infrastructure exists:
  *   1. content_access_logs — one row per protected content request
  *   2. expires_at on learner_course_access — DRM-006 enrollment expiry
@@ -822,48 +884,286 @@ router.get("/analytics/overview", (_req, res) => {
   }));
 });
 
-router.get("/users", async (_req, res) => {
+const USER_ROLES = new Set(["admin", "faculty", "student"]);
+const USER_STATUSES = new Set(["Active", "Pending", "Invited", "Suspended"]);
+const canonicalRole = (role: unknown) => String(role ?? "").trim().toLowerCase() === "learner"
+  ? "student" : String(role ?? "").trim().toLowerCase();
+const roleLabel = (role: string | null) => role === "admin" ? "Admin" : role === "faculty" ? "Faculty" : "Learner";
+const userResponse = (user: typeof usersTable.$inferSelect) => ({ ...user, role: roleLabel(user.role), group: user.groupName ?? "" });
+
+type ClerkProvisioningResult = {
+  status: "Active" | "Invited";
+  invitationSent: boolean;
+  accountExists: boolean;
+};
+
+function hasInvitationBinding(clerkUser: { publicMetadata: unknown }, directoryUserId: string): boolean {
+  const metadata = clerkUser.publicMetadata;
+  return typeof metadata === "object"
+    && metadata !== null
+    && (metadata as Record<string, unknown>).lmsUserId === directoryUserId;
+}
+
+async function provisionClerkAccess(
+  user: { id: string; email: string; role: string | null },
+  forceNewInvitation = false,
+): Promise<ClerkProvisioningResult> {
+  const clerkUsers = await clerkClient.users.getUserList({ emailAddress: [user.email], limit: 1 });
+  if (clerkUsers.data.length > 0) {
+    return { status: "Active", invitationSent: false, accountExists: true };
+  }
+  if (!forceNewInvitation) {
+    const pending = await clerkClient.invitations.getInvitationList({
+      query: user.email,
+      status: "pending",
+      limit: 20,
+    });
+    if (pending.data.some((invitation) => invitation.emailAddress.toLowerCase() === user.email.toLowerCase())) {
+      return { status: "Invited", invitationSent: false, accountExists: false };
+    }
+  }
+  await clerkClient.invitations.createInvitation({
+    emailAddress: user.email,
+    redirectUrl: "/sign-up",
+    ignoreExisting: forceNewInvitation,
+    publicMetadata: { lmsUserId: user.id, role: user.role },
+  });
+  return { status: "Invited", invitationSent: true, accountExists: false };
+}
+
+type ImportedDirectoryUser = {
+  name: string;
+  email: string;
+  role: string;
+  groupName: string;
+  status: string;
+  lastActivity?: string;
+};
+
+async function persistDirectoryImport(options: {
+  source: "csv" | "tribyte";
+  filename: string;
+  users: ImportedDirectoryUser[];
+  groupNames: string[];
+  warnings?: string[];
+}) {
+  const importId = `import-${randomUUID()}`;
+  let added = 0, updated = 0, groupsImported = 0;
+  await db.transaction(async (tx) => {
+    for (const groupName of [...new Set(options.groupNames.map((name) => name.trim()).filter(Boolean))]) {
+      const inserted = await tx.insert(groupsTable)
+        .values({ id: `g-import-${randomUUID()}`, name: groupName })
+        .onConflictDoNothing()
+        .returning({ id: groupsTable.id });
+      if (inserted.length) groupsImported++;
+    }
+    for (const input of options.users) {
+      const email = input.email.trim().toLowerCase();
+      const [existing] = await tx.select().from(usersTable).where(ilike(usersTable.email, email));
+      const nextStatus = input.status === "Suspended"
+        ? "Suspended"
+        : existing?.status ?? "Pending";
+      const values = {
+        name: input.name,
+        email,
+        role: canonicalRole(input.role),
+        groupName: input.groupName,
+        status: nextStatus,
+        lastActivity: input.lastActivity ?? existing?.lastActivity ?? "Never",
+      };
+      if (existing) {
+        await tx.update(usersTable).set(values).where(eq(usersTable.id, existing.id));
+        updated++;
+        continue;
+      }
+      const inserted = await tx.insert(usersTable)
+        .values({ id: `u-import-${randomUUID()}`, ...values })
+        .onConflictDoNothing()
+        .returning({ id: usersTable.id });
+      if (inserted.length) {
+        added++;
+      } else {
+        const [racedUser] = await tx.select({ id: usersTable.id }).from(usersTable).where(ilike(usersTable.email, email));
+        if (racedUser) {
+          await tx.update(usersTable).set(values).where(eq(usersTable.id, racedUser.id));
+          updated++;
+        }
+      }
+    }
+    await tx.insert(userImportRunsTable).values({
+      id: importId,
+      source: options.source,
+      filename: options.filename,
+      total: options.users.length + (options.warnings?.length ?? 0),
+      added,
+      updated,
+      failed: options.warnings?.length ?? 0,
+      warnings: options.warnings ?? [],
+    });
+  });
+  return { importId, added, updated, groupsImported };
+}
+
+router.get("/users", requireAdmin, async (req, res) => {
   try {
-    const rows = await db.select().from(usersTable);
-    // Map DB field groupName → API field group
-    const mapped = rows.map(r => ({ ...r, group: r.groupName ?? '' }));
-    res.json(ListUsersResponse.parse(mapped));
+    const { search = "", role = "", group = "", status = "" } = req.query as Record<string, string>;
+    const rows = (await db.select().from(usersTable)).filter((user) => {
+      const matchesSearch = !search || `${user.name} ${user.email}`.toLowerCase().includes(search.toLowerCase());
+      return matchesSearch
+        && (!role || canonicalRole(role) === user.role)
+        && (!group || user.groupName === group)
+        && (!status || user.status === status);
+    });
+    res.json(rows.map(userResponse));
   }
   catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
 router.patch("/users/:userId", requireAdmin, async (req, res) => {
-  const params = UpdateUserGroupParams.safeParse(req.params);
-  if (!params.success) {
-    res.status(400).json({ error: params.error.message });
-    return;
-  }
-  const body = UpdateUserGroupBody.safeParse(req.body);
-  if (!body.success) {
-    res.status(400).json({ error: body.error.message });
-    return;
-  }
-
   try {
-    const [group] = await db.select().from(groupsTable).where(eq(groupsTable.name, body.data.group));
-    if (!group) {
-      res.status(404).json({ error: "Group not found" });
+    const userId = String(req.params.userId);
+    const body = req.body as Record<string, unknown>;
+    const updates: Record<string, string> = {};
+    if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim();
+    if (typeof body.role === "string") {
+      const role = canonicalRole(body.role);
+      if (!USER_ROLES.has(role)) { res.status(400).json({ error: "Role must be Admin, Faculty, or Learner" }); return; }
+      updates.role = role;
+    }
+    if (typeof body.status === "string") {
+      if (!USER_STATUSES.has(body.status)) { res.status(400).json({ error: "Invalid user status" }); return; }
+      updates.status = body.status;
+    }
+    if (typeof body.group === "string") {
+      const [group] = await db.select().from(groupsTable).where(eq(groupsTable.name, body.group));
+      if (!group) { res.status(404).json({ error: "Group not found" }); return; }
+      updates.groupName = group.name;
+    }
+    if (!Object.keys(updates).length) {
+      res.status(400).json({ error: "Provide a name, role, status, or group" });
       return;
     }
-
     const [user] = await db.update(usersTable)
-      .set({ groupName: group.name })
-      .where(eq(usersTable.id, params.data.userId))
+      .set(updates)
+      .where(eq(usersTable.id, userId))
       .returning();
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
-
-    res.json(UpdateUserGroupResponse.parse({ ...user, group: user.groupName ?? "" }));
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    res.json(userResponse(user));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
+});
+
+router.post("/users", requireAdmin, async (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const role = canonicalRole(body.role || "student");
+  const groupName = typeof body.group === "string" ? body.group.trim() : "";
+  if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !USER_ROLES.has(role)) {
+    res.status(400).json({ error: "Name, a valid email, and a valid role are required" }); return;
+  }
+  try {
+    if (groupName) {
+      const [group] = await db.select().from(groupsTable).where(eq(groupsTable.name, groupName));
+      if (!group) { res.status(404).json({ error: "Group not found" }); return; }
+    }
+    const [existing] = await db.select().from(usersTable).where(ilike(usersTable.email, email));
+    if (existing) { res.status(409).json({ error: "A user with that email already exists" }); return; }
+    const id = `user-${randomUUID()}`;
+    let clerkResult: ClerkProvisioningResult;
+    try {
+      clerkResult = await provisionClerkAccess({ id, email, role });
+    } catch (error) {
+      req.log.error({ error }, "Could not create Clerk invitation");
+      res.status(502).json({ error: "Could not send the Clerk invitation. No directory user was created." });
+      return;
+    }
+    const [user] = await db.insert(usersTable).values({
+      id, name, email, role, groupName, status: clerkResult.status, lastActivity: "Never",
+    }).returning();
+    res.status(201).json({ ...userResponse(user), ...clerkResult });
+  } catch (error) { res.status(500).json({ error: String(error) }); }
+});
+
+router.get("/users/imports", requireAdmin, async (_req, res) => {
+  try {
+    const rows = await db.select().from(userImportRunsTable).orderBy(desc(userImportRunsTable.createdAt)).limit(50);
+    res.json(rows);
+  } catch (error) { res.status(500).json({ error: String(error) }); }
+});
+
+router.post("/users/invite-pending", requireAdmin, async (req, res) => {
+  const pendingUsers = await db.select().from(usersTable).where(eq(usersTable.status, "Pending"));
+  let sent = 0, activated = 0;
+  const failures: Array<{ userId: string; error: string }> = [];
+  let cursor = 0;
+  async function worker() {
+    while (cursor < pendingUsers.length) {
+      const user = pendingUsers[cursor++];
+      try {
+        const result = await provisionClerkAccess(user);
+        await db.update(usersTable).set({ status: result.status }).where(eq(usersTable.id, user.id));
+        if (result.accountExists) activated++;
+        else if (result.status === "Invited") sent++;
+      } catch (error) {
+        req.log.error({ error, userId: user.id }, "Could not provision pending Clerk user");
+        failures.push({ userId: user.id, error: "Clerk invitation failed" });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(5, pendingUsers.length) }, () => worker()));
+  res.json({ total: pendingUsers.length, sent, activated, failed: failures.length, failures });
+});
+
+router.post("/users/:userId/invite", requireAdmin, async (req, res) => {
+  const userId = String(req.params.userId);
+  try {
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    if (user.status === "Suspended") { res.status(409).json({ error: "Activate the user before sending an invitation" }); return; }
+    const result = await provisionClerkAccess(user, true);
+    await db.update(usersTable).set({ status: result.status }).where(eq(usersTable.id, user.id));
+    res.json({ sent: result.invitationSent, accountExists: result.accountExists });
+  } catch (error) {
+    req.log.error({ error, userId }, "Could not resend Clerk invitation");
+    res.status(502).json({ error: "Could not send the Clerk invitation" });
+  }
+});
+
+router.get("/users/:userId/enrollments", requireAdmin, async (req, res) => {
+  const userId = String(req.params.userId);
+  const rows = await db.select().from(userCourseEnrollmentsTable).where(eq(userCourseEnrollmentsTable.userId, userId));
+  res.json(rows.map(row => ({ courseId: row.courseId })));
+});
+
+router.put("/users/:userId/enrollments", requireAdmin, async (req, res) => {
+  const userId = String(req.params.userId);
+  const courseIds: string[] | null = Array.isArray(req.body?.courseIds)
+    ? [...new Set<string>(req.body.courseIds.filter((id: unknown): id is string => typeof id === "string"))]
+    : null;
+  if (!courseIds) { res.status(400).json({ error: "courseIds must be an array" }); return; }
+  try {
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    const courses = await db.select({ id: curriculumCoursesTable.id }).from(curriculumCoursesTable);
+    const validIds = new Set(courses.map(course => course.id));
+    if (courseIds.some(id => !validIds.has(id))) { res.status(400).json({ error: "One or more courses do not exist" }); return; }
+    const [identity] = await db.select().from(learnerIdentitiesTable).where(eq(learnerIdentitiesTable.userId, userId));
+    await db.transaction(async (tx) => {
+      await tx.delete(userCourseEnrollmentsTable).where(eq(userCourseEnrollmentsTable.userId, userId));
+      if (identity) {
+        await tx.delete(learnerCourseAccessTable).where(eq(learnerCourseAccessTable.clerkUserId, identity.clerkUserId));
+      }
+      if (courseIds.length) await tx.insert(userCourseEnrollmentsTable).values(courseIds.map(courseId => ({
+        id: `user-enrollment-${randomUUID()}`, userId, courseId,
+      })));
+      if (identity && courseIds.length) await tx.insert(learnerCourseAccessTable).values(courseIds.map(courseId => ({
+        id: `course-access-${randomUUID()}`, clerkUserId: identity.clerkUserId, courseId,
+      })));
+    });
+    res.json({ userId, courseIds });
+  } catch (error) { res.status(500).json({ error: String(error) }); }
 });
 
 // ─── OBE / Academic routes ────────────────────────────────────────────────────
@@ -995,7 +1295,7 @@ router.get("/curriculum/groups", async (_req, res) => {
   catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.post("/curriculum/groups", async (req, res) => {
+router.post("/curriculum/groups", requireFacultyOrAdmin, async (req, res) => {
   const { name, parentId } = req.body as { name: string; parentId?: string };
   if (!name) { res.status(400).json({ error: "name is required" }); return; }
   try {
@@ -1005,9 +1305,9 @@ router.post("/curriculum/groups", async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.delete("/curriculum/groups/:id", async (req, res) => {
+router.delete("/curriculum/groups/:id", requireFacultyOrAdmin, async (req, res) => {
   try {
-    await db.delete(groupsTable).where(eq(groupsTable.id, req.params.id));
+    await db.delete(groupsTable).where(eq(groupsTable.id, String(req.params.id)));
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -1782,13 +2082,48 @@ const TRIBYTE_COURSES_LAST_SYNCED_KEY = "tribyte_courses_last_synced_at";
  * Middleware: require an active authenticated admin session.
  * Sessions are established via POST /api/auth/login.
  */
+async function requireDirectoryRole(
+  req: import("express").Request,
+  res: import("express").Response,
+  next: import("express").NextFunction,
+  allowedRoles: ReadonlySet<string>,
+) {
+  if (req.session.isAdmin === true) { next(); return; }
+  if (!getAuth(req).userId) {
+    res.status(401).json({ error: "Sign in as an authorized administrator" });
+    return;
+  }
+  try {
+    const learner = await resolveLearner(req);
+    if (!learner) { res.status(401).json({ error: "Sign in as an authorized administrator" }); return; }
+    const [directoryUser] = await db.select({ role: usersTable.role, status: usersTable.status })
+      .from(usersTable)
+      .where(eq(usersTable.id, learner.userId));
+    if (!directoryUser || directoryUser.status !== "Active" || !allowedRoles.has(directoryUser.role ?? "")) {
+      res.status(403).json({ error: "Your LMS role does not have permission for this action" });
+      return;
+    }
+    next();
+  } catch (error) {
+    req.log.warn({ error }, "Could not resolve directory role");
+    res.status(403).json({ error: "Your LMS role could not be verified" });
+  }
+}
+
 function requireAdmin(
   req: import("express").Request,
   res: import("express").Response,
   next: import("express").NextFunction,
 ) {
-  if (req.session.isAdmin === true) { next(); return; }
-  res.status(401).json({ error: "Unauthorized — admin login required" });
+  void requireDirectoryRole(req, res, next, new Set(["admin"]));
+}
+
+function requireFacultyOrAdmin(
+  req: import("express").Request,
+  res: import("express").Response,
+  next: import("express").NextFunction,
+) {
+  void requireDirectoryRole(req, res, next, new Set(["admin", "faculty"]));
 }
 
 type ResolvedLearner = {
@@ -1797,13 +2132,28 @@ type ResolvedLearner = {
   email: string;
 };
 
+async function reconcileLearnerIdentity(identity: ResolvedLearner): Promise<ResolvedLearner> {
+  const [directoryUser] = await db.select().from(usersTable).where(eq(usersTable.id, identity.userId));
+  if (!directoryUser) return identity;
+  const pendingEnrollments = await db.select().from(userCourseEnrollmentsTable)
+    .where(eq(userCourseEnrollmentsTable.userId, identity.userId));
+  if (pendingEnrollments.length) {
+    await db.insert(learnerCourseAccessTable).values(pendingEnrollments.map((enrollment) => ({
+      id: `course-access-${randomBytes(10).toString("hex")}`,
+      clerkUserId: identity.clerkUserId,
+      courseId: enrollment.courseId,
+    }))).onConflictDoNothing();
+  }
+  return identity;
+}
+
 async function resolveLearner(req: import("express").Request): Promise<ResolvedLearner | null> {
   const clerkUserId = getAuth(req).userId;
   if (!clerkUserId) return null;
 
-  const [identity] = await db.select().from(learnerIdentitiesTable)
+  const [existingIdentity] = await db.select().from(learnerIdentitiesTable)
     .where(eq(learnerIdentitiesTable.clerkUserId, clerkUserId));
-  if (identity) return identity;
+  if (existingIdentity) return reconcileLearnerIdentity(existingIdentity);
 
   // The email comes directly from Clerk's server API, never from the browser.
   const clerkUser = await clerkClient.users.getUser(clerkUserId);
@@ -1814,14 +2164,27 @@ async function resolveLearner(req: import("express").Request): Promise<ResolvedL
     || email.split("@")[0];
   const [existingUser] = await db.select().from(usersTable)
     .where(ilike(usersTable.email, email));
-  const user = existingUser ?? (await db.insert(usersTable).values({
-    id: `learner-${randomBytes(10).toString("hex")}`,
-    name,
-    email,
-    role: "student",
-    status: "Active",
-    lastActivity: "Just now",
-  }).returning())[0];
+  let user = existingUser;
+  if (user && user.status !== "Active") {
+    // A matching email is not enough to activate an imported roster entry.
+    // Only Clerk's server-issued invitation metadata for this exact record can
+    // turn an Invited directory user into an active account.
+    if (user.status !== "Invited" || !hasInvitationBinding(clerkUser, user.id)) return null;
+    [user] = await db.update(usersTable)
+      .set({ status: "Active", lastActivity: "Just now" })
+      .where(eq(usersTable.id, user.id))
+      .returning();
+  }
+  if (!user) {
+    [user] = await db.insert(usersTable).values({
+      id: `learner-${randomBytes(10).toString("hex")}`,
+      name,
+      email,
+      role: "student",
+      status: "Active",
+      lastActivity: "Just now",
+    }).returning();
+  }
 
   const [createdIdentity] = await db.insert(learnerIdentitiesTable).values({
     clerkUserId,
@@ -1829,13 +2192,22 @@ async function resolveLearner(req: import("express").Request): Promise<ResolvedL
     email,
     updatedAt: new Date(),
   }).onConflictDoNothing().returning();
-  return createdIdentity ?? (await db.select().from(learnerIdentitiesTable)
+  const resolvedIdentity = createdIdentity ?? (await db.select().from(learnerIdentitiesTable)
     .where(eq(learnerIdentitiesTable.clerkUserId, clerkUserId)))[0];
+  return reconcileLearnerIdentity(resolvedIdentity);
+}
+
+async function resolveActiveLearner(req: import("express").Request): Promise<ResolvedLearner | null> {
+  const learner = await resolveLearner(req);
+  if (!learner) return null;
+  const [directoryUser] = await db.select({ role: usersTable.role, status: usersTable.status }).from(usersTable)
+    .where(eq(usersTable.id, learner.userId));
+  return directoryUser?.role === "student" && directoryUser.status === "Active" ? learner : null;
 }
 
 async function learnerCanAccessCourse(req: import("express").Request, courseId: string): Promise<boolean> {
   if (req.session.isAdmin === true) return true;
-  const learner = await resolveLearner(req);
+  const learner = await resolveActiveLearner(req);
   if (!learner) return false;
   const [access] = await db.select({ id: learnerCourseAccessTable.id })
     .from(learnerCourseAccessTable)
@@ -1848,8 +2220,9 @@ async function learnerCanAccessCourse(req: import("express").Request, courseId: 
 
 router.get("/learner/me", async (req, res) => {
   try {
-    const learner = await resolveLearner(req);
-    if (!learner) { res.status(401).json({ error: "Learner sign-in required" }); return; }
+    if (!getAuth(req).userId) { res.status(401).json({ error: "Learner sign-in required" }); return; }
+    const learner = await resolveActiveLearner(req);
+    if (!learner) { res.status(403).json({ error: "Active learner access required" }); return; }
     const access = await db.select({ courseId: learnerCourseAccessTable.courseId })
       .from(learnerCourseAccessTable)
       .where(eq(learnerCourseAccessTable.clerkUserId, learner.clerkUserId));
@@ -4010,7 +4383,11 @@ router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, r
 });
 
 setTimeout(() => { void resumeStructureImportJobs(); }, 1_000);
-setTimeout(() => { void resumeResourceImportJobs(); }, 1_200);
+setTimeout(() => {
+  void resumeResourceImportJobs().catch(error => {
+    logger.error({ error: publicResourceImportError(error) }, "Could not resume resource import jobs");
+  });
+}, 1_200);
 
 /**
  * POST /api/curriculum/sync-tribyte
@@ -4402,37 +4779,15 @@ router.post("/users/sync-tribyte", requireAdmin, async (_req, res) => {
       : derivedGroupNames;
 
     try {
-      let groupsImported = 0;
-      const existingGroups = await db.select().from(groupsTable);
-      const existingGroupNames = new Set(existingGroups.map(g => g.name.toLowerCase()));
-      for (const gname of groupNamesToImport) {
-        if (!existingGroupNames.has(gname.toLowerCase())) {
-          await db.insert(groupsTable).values({ id: `g-tb-${Date.now()}-${groupsImported}`, name: gname }).onConflictDoNothing();
-          groupsImported++;
-        }
-      }
-
-      let usersAdded = 0, usersUpdated = 0;
-      const existingUsers = await db.select().from(usersTable);
-      const byEmail = new Map(existingUsers.map(u => [u.email.toLowerCase(), u]));
-      for (const u of scrapedUsers) {
-        const existing = byEmail.get(u.email.toLowerCase());
-        if (existing) {
-          await db.update(usersTable)
-            .set({ name: u.name, role: u.role, groupName: u.groupName, status: u.status })
-            .where(eq(usersTable.id, existing.id));
-          usersUpdated++;
-        } else {
-          await db.insert(usersTable).values({
-            id: `u-tb-${Date.now()}-${usersAdded}`,
-            name: u.name, email: u.email, role: u.role,
-            groupName: u.groupName, status: u.status, lastActivity: u.lastActivity,
-          }).onConflictDoNothing();
-          usersAdded++;
-        }
-      }
+      const result = await persistDirectoryImport({
+        source: "tribyte",
+        filename: "tribyte-users-live",
+        users: scrapedUsers,
+        groupNames: groupNamesToImport,
+        warnings: errors,
+      });
       res.json({
-        usersAdded, usersUpdated, groupsImported,
+        usersAdded: result.added, usersUpdated: result.updated, groupsImported: result.groupsImported,
         totalUsers: scrapedUsers.length, totalGroups: groupNamesToImport.length,
         usedStaticFallback: false, strategy, strategyErrors: errors,
       });
@@ -4447,45 +4802,16 @@ router.post("/users/sync-tribyte", requireAdmin, async (_req, res) => {
   const groupNamesToImport = STATIC_TRIBYTE_GROUPS;
 
   try {
-    // ── Upsert groups ──
-    let groupsImported = 0;
-    const existingGroups = await db.select().from(groupsTable);
-    const existingGroupNames = new Set(existingGroups.map(g => g.name.toLowerCase()));
-    for (const gname of groupNamesToImport) {
-      if (!existingGroupNames.has(gname.toLowerCase())) {
-        await db.insert(groupsTable).values({ id: `g-tb-${Date.now()}-${groupsImported}`, name: gname }).onConflictDoNothing();
-        groupsImported++;
-      }
-    }
-
-    // ── Upsert users ──
-    let usersAdded = 0, usersUpdated = 0;
-    const existingUsers = await db.select().from(usersTable);
-    const byEmail = new Map(existingUsers.map(u => [u.email.toLowerCase(), u]));
-
-    for (const u of usersToImport) {
-      const existing = byEmail.get(u.email.toLowerCase());
-      if (existing) {
-        await db.update(usersTable)
-          .set({ name: u.name, role: u.role, groupName: u.groupName, status: u.status })
-          .where(eq(usersTable.id, existing.id));
-        usersUpdated++;
-      } else {
-        await db.insert(usersTable).values({
-          id:           `u-tb-${Date.now()}-${usersAdded}`,
-          name:         u.name,
-          email:        u.email,
-          role:         u.role,
-          groupName:    u.groupName,
-          status:       u.status,
-          lastActivity: u.lastActivity,
-        }).onConflictDoNothing();
-        usersAdded++;
-      }
-    }
+    const result = await persistDirectoryImport({
+      source: "tribyte",
+      filename: "tribyte-users-static",
+      users: usersToImport,
+      groupNames: groupNamesToImport,
+      warnings: errors,
+    });
 
     res.json({
-      usersAdded, usersUpdated, groupsImported,
+      usersAdded: result.added, usersUpdated: result.updated, groupsImported: result.groupsImported,
       totalUsers: usersToImport.length, totalGroups: groupNamesToImport.length,
       usedStaticFallback, strategy, strategyErrors: errors,
     });
@@ -4594,10 +4920,39 @@ router.get("/curriculum/access-logs", requireAdmin, async (req, res) => {
 
 // ─── User import ──────────────────────────────────────────────────────────────
 
-router.post("/users/import", async (req, res) => {
-  const parsed = ImportUsersBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  res.status(201).json(ImportUsersResponse.parse({ id: `import-${Date.now()}`, filename: parsed.data.filename, status: "Validated", total: parsed.data.rows, valid: Math.max(parsed.data.rows - 2, 0), warnings: Math.min(2, parsed.data.rows), failed: 0, progress: 100 }));
+router.post("/users/import", requireAdmin, async (req, res) => {
+  const filename = typeof req.body?.filename === "string" ? req.body.filename : "users.csv";
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+  if (!rows) { res.status(400).json({ error: "rows must be an array of CSV records" }); return; }
+  const warnings: string[] = [];
+  type NormalizedImportUser = { name: string; email: string; role: string; groupName: string; status: string };
+  const normalized: NormalizedImportUser[] = rows.flatMap((raw: unknown, index: number): NormalizedImportUser[] => {
+    const row = raw as Record<string, unknown>;
+    const email = typeof row.email === "string" ? row.email.trim().toLowerCase() : "";
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    const role = canonicalRole(row.role || "student");
+    const groupName = typeof row.group === "string" ? row.group.trim() : "";
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !USER_ROLES.has(role)) {
+      warnings.push(`Row ${index + 2} was skipped: name, email, and role are required.`); return [];
+    }
+    return [{ name, email, role, groupName, status: String(row.status) === "Suspended" ? "Suspended" : "Pending" }];
+  });
+  try {
+    const result = await persistDirectoryImport({
+      source: "csv",
+      filename,
+      users: normalized,
+      groupNames: normalized.map((row) => row.groupName),
+      warnings,
+    });
+    res.status(201).json({
+      id: result.importId, filename, status: "Imported", total: rows.length, valid: normalized.length,
+      warnings: warnings.length, failed: warnings.length, progress: 100,
+      added: result.added, updated: result.updated, messages: warnings,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
 export default router;

@@ -8,12 +8,10 @@
 import type { UserRole } from './userRole';
 import type { UserStatus } from './userStatus';
 
-export interface User {
-  id: string;
+export interface UserImportRow {
   name: string;
   email: string;
-  role: UserRole;
-  group: string;
-  status: UserStatus;
-  lastActivity: string;
+  role?: UserRole;
+  group?: string;
+  status?: UserStatus;
 }

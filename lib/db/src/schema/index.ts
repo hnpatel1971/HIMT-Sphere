@@ -1,4 +1,5 @@
-import { pgTable, text, integer, bigint, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, text, integer, bigint, boolean, timestamp, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 
 // ─── Curriculum management ────────────────────────────────────────────────────
 
@@ -7,7 +8,9 @@ export const groups = pgTable("groups", {
   name:      text("name").notNull(),
   parentId:  text("parent_id"),           // self-ref for tree (no FK cycle in Drizzle)
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("groups_name_lower_unique").on(sql`lower(${table.name})`),
+]);
 
 export const curriculumCourses = pgTable("curriculum_courses", {
   id:               text("id").primaryKey(),
@@ -64,7 +67,9 @@ export const users = pgTable("users", {
   status:       text("status").default("Active"),
   lastActivity: text("last_activity").default("Never"),
   createdAt:    timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("users_email_lower_unique").on(sql`lower(${table.email})`),
+]);
 
 export const learnerIdentities = pgTable("learner_identities", {
   clerkUserId: text("clerk_user_id").primaryKey(),
@@ -72,7 +77,9 @@ export const learnerIdentities = pgTable("learner_identities", {
   email:       text("email").notNull(),
   createdAt:   timestamp("created_at").defaultNow().notNull(),
   updatedAt:   timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("learner_identities_user_id_unique").on(table.userId),
+]);
 
 export const learnerCourseAccess = pgTable("learner_course_access", {
   id:          text("id").primaryKey(),
@@ -80,6 +87,31 @@ export const learnerCourseAccess = pgTable("learner_course_access", {
   courseId:    text("course_id").notNull(),
   expiresAt:   timestamp("expires_at"),    // DRM-006: null = no expiry; set to restrict time-limited access
   createdAt:   timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("learner_course_access_identity_course_unique").on(table.clerkUserId, table.courseId),
+]);
+
+/** Admin-managed course assignments. These exist before a learner's first Clerk sign-in. */
+export const userCourseEnrollments = pgTable("user_course_enrollments", {
+  id:        text("id").primaryKey(),
+  userId:    text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  courseId:  text("course_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("user_course_enrollments_user_course_unique").on(table.userId, table.courseId),
+]);
+
+/** Durable summary for each user roster import. Raw credentials and source files are never stored. */
+export const userImportRuns = pgTable("user_import_runs", {
+  id:        text("id").primaryKey(),
+  source:    text("source").notNull(),
+  filename:  text("filename").notNull(),
+  total:     integer("total").notNull(),
+  added:     integer("added").notNull(),
+  updated:   integer("updated").notNull(),
+  failed:    integer("failed").notNull(),
+  warnings:  jsonb("warnings").default([]).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 // ─── DRM access audit ─────────────────────────────────────────────────────────
@@ -372,6 +404,8 @@ export type InsertFaqCategory = typeof faqCategories.$inferInsert;
 
 export type User              = typeof users.$inferSelect;
 export type InsertUser        = typeof users.$inferInsert;
+export type UserCourseEnrollment = typeof userCourseEnrollments.$inferSelect;
+export type UserImportRun = typeof userImportRuns.$inferSelect;
 
 export type Course            = typeof courses.$inferSelect;
 export type InsertCourse      = typeof courses.$inferInsert;

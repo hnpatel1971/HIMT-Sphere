@@ -8,7 +8,7 @@
 import type { UserRole } from './userRole';
 import type { UserStatus } from './userStatus';
 
-export interface User {
+export interface UserCreateResult {
   id: string;
   name: string;
   email: string;
@@ -16,4 +16,6 @@ export interface User {
   group: string;
   status: UserStatus;
   lastActivity: string;
+  invitationSent: boolean;
+  accountExists: boolean;
 }

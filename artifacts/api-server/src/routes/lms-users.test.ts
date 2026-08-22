@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
@@ -18,24 +19,20 @@ async function getAvailablePort(): Promise<number> {
   return address.port;
 }
 
-async function waitForRoster(baseUrl: string) {
+async function waitForServer(baseUrl: string) {
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
-      const response = await fetch(`${baseUrl}/users`);
-      if (response.ok) {
-        const users = await response.json() as Array<{ id: string; group: string }>;
-        const user = users.find((row) => row.id === "user-001");
-        if (user) return user;
-      }
+      const response = await fetch(`${baseUrl}/auth/status`);
+      if (response.ok) return;
     } catch {
       // The test server is still starting.
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("Test roster did not become available");
+  throw new Error("Test server did not become available");
 }
 
-test("only an authenticated admin can update a user's group", async (t) => {
+test("admin user workspace is authorized, persistent, and duplicate-safe", async (t) => {
   const port = await getAvailablePort();
   const serverProcess = spawn(process.execPath, ["--enable-source-maps", "dist/index.mjs"], {
     cwd: packageRoot,
@@ -46,8 +43,14 @@ test("only an authenticated admin can update a user's group", async (t) => {
       SESSION_SECRET: "lms-user-group-test-session-secret",
       ADMIN_USERNAME: "lms-test-admin",
       ADMIN_PASSWORD: "lms-test-password",
+      CLERK_SECRET_KEY: "sk_test_aW52YWxpZC5jbGVyay5hY2NvdW50cy5kZXYk",
     },
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let serverErrorOutput = "";
+  serverProcess.stderr?.on("data", (chunk) => { serverErrorOutput += String(chunk); });
+  serverProcess.on("exit", (code) => {
+    if (code && code !== 0) console.error(serverErrorOutput);
   });
   const serverExit = once(serverProcess, "exit");
   const baseUrl = `http://127.0.0.1:${port}/api`;
@@ -57,15 +60,28 @@ test("only an authenticated admin can update a user's group", async (t) => {
     await serverExit;
   });
 
-  const user = await waitForRoster(baseUrl);
-  const targetGroup = user.group === "All Content" ? "Engineering" : "All Content";
+  await waitForServer(baseUrl);
 
-  const unauthenticated = await fetch(`${baseUrl}/users/${user.id}`, {
-    method: "PATCH",
+  const unauthorizedDirectory = await fetch(`${baseUrl}/users`);
+  assert.equal(unauthorizedDirectory.status, 401);
+  const unauthorizedImport = await fetch(`${baseUrl}/users/import`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ group: targetGroup }),
+    body: JSON.stringify({ filename: "unauthorized.csv", rows: [{ name: "Blocked", email: "blocked@example.invalid" }] }),
   });
-  assert.equal(unauthenticated.status, 401);
+  assert.equal(unauthorizedImport.status, 401);
+  const unauthorizedGroup = await fetch(`${baseUrl}/curriculum/groups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Blocked group" }),
+  });
+  assert.equal(unauthorizedGroup.status, 401);
+  const unauthorizedEnrollment = await fetch(`${baseUrl}/users/missing/enrollments`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ courseIds: [] }),
+  });
+  assert.equal(unauthorizedEnrollment.status, 401);
 
   const login = await fetch(`${baseUrl}/auth/login`, {
     method: "POST",
@@ -76,42 +92,141 @@ test("only an authenticated admin can update a user's group", async (t) => {
   const sessionCookie = login.headers.get("set-cookie")?.split(";")[0];
   assert.ok(sessionCookie, "admin login should issue a session cookie");
 
-  const groupCatalog = await fetch(`${baseUrl}/curriculum/groups`);
-  assert.equal(groupCatalog.status, 200);
-  const existingGroups = await groupCatalog.json() as Array<{ id: string; name: string }>;
+  const suffix = randomUUID();
+  const email = `workspace-${suffix}@example.invalid`;
+  const group = `Workspace test ${suffix}`;
+  const filename = `workspace-${suffix}.csv`;
+  let importedUserId: string | null = null;
   let temporaryGroupId: string | null = null;
-  if (!existingGroups.some((group) => group.name === user.group)) {
-    const createdGroup = await fetch(`${baseUrl}/curriculum/groups`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
-      body: JSON.stringify({ name: user.group }),
-    });
-    assert.equal(createdGroup.status, 201);
-    temporaryGroupId = (await createdGroup.json() as { id: string }).id;
-  }
 
   try {
-    const updated = await fetch(`${baseUrl}/users/${user.id}`, {
+    const firstImport = await fetch(`${baseUrl}/users/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      body: JSON.stringify({
+        filename,
+        rows: [{ name: "Workspace Faculty", email, role: "Faculty", group, status: "Active" }],
+      }),
+    });
+    assert.equal(firstImport.status, 201);
+    const firstResult = await firstImport.json() as { id: string; added: number; updated: number };
+    assert.equal(firstResult.added, 1);
+    assert.equal(firstResult.updated, 0);
+
+    const pendingDirectory = await fetch(
+      `${baseUrl}/users?search=${encodeURIComponent(email)}&status=Pending`,
+      { headers: { Cookie: sessionCookie } },
+    );
+    assert.equal(pendingDirectory.status, 200);
+    assert.equal((await pendingDirectory.json() as Array<unknown>).length, 1);
+
+    const failedInvitations = await fetch(`${baseUrl}/users/invite-pending`, {
+      method: "POST",
+      headers: { Cookie: sessionCookie },
+    });
+    assert.equal(failedInvitations.status, 200);
+    const failedInvitationResult = await failedInvitations.json() as { failed: number };
+    assert.ok(failedInvitationResult.failed >= 1, "a Clerk failure should be reported without activating the user");
+    const stillPending = await fetch(
+      `${baseUrl}/users?search=${encodeURIComponent(email)}&status=Pending`,
+      { headers: { Cookie: sessionCookie } },
+    );
+    assert.equal((await stillPending.json() as Array<unknown>).length, 1);
+
+    const failedCreateEmail = `failed-create-${suffix}@example.invalid`;
+    const failedCreate = await fetch(`${baseUrl}/users`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      body: JSON.stringify({ name: "Failed Clerk Create", email: failedCreateEmail, role: "Learner", group }),
+    });
+    assert.equal(failedCreate.status, 502);
+    const failedCreateLookup = await fetch(
+      `${baseUrl}/users?search=${encodeURIComponent(failedCreateEmail)}`,
+      { headers: { Cookie: sessionCookie } },
+    );
+    assert.deepEqual(await failedCreateLookup.json(), [], "failed Clerk provisioning must not create a directory row");
+
+    const secondImport = await fetch(`${baseUrl}/users/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      body: JSON.stringify({
+        filename,
+        rows: [{ name: "Workspace Learner", email: email.toUpperCase(), role: "Learner", group, status: "Suspended" }],
+      }),
+    });
+    assert.equal(secondImport.status, 201);
+    const secondResult = await secondImport.json() as { id: string; added: number; updated: number };
+    assert.equal(secondResult.added, 0);
+    assert.equal(secondResult.updated, 1);
+
+    const filteredDirectory = await fetch(
+      `${baseUrl}/users?search=${encodeURIComponent(email)}&role=Learner&group=${encodeURIComponent(group)}&status=Suspended`,
+      { headers: { Cookie: sessionCookie } },
+    );
+    assert.equal(filteredDirectory.status, 200);
+    const matches = await filteredDirectory.json() as Array<{ id: string; name: string; email: string; role: string; group: string; status: string }>;
+    assert.equal(matches.length, 1, "case-insensitive re-import must update rather than duplicate");
+    assert.equal(matches[0].name, "Workspace Learner");
+    importedUserId = matches[0].id;
+
+    const updated = await fetch(`${baseUrl}/users/${importedUserId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Cookie: sessionCookie },
-      body: JSON.stringify({ group: targetGroup }),
+      body: JSON.stringify({ name: "Workspace Faculty Updated", role: "Faculty", status: "Active", group }),
     });
     assert.equal(updated.status, 200);
-    assert.equal((await updated.json()).group, targetGroup);
-  } finally {
-    const restored = await fetch(`${baseUrl}/users/${user.id}`, {
-      method: "PATCH",
+    assert.deepEqual(
+      (({ name, role, status, group: groupName }) => ({ name, role, status, group: groupName }))(await updated.json()),
+      { name: "Workspace Faculty Updated", role: "Faculty", status: "Active", group },
+    );
+
+    const reread = await fetch(`${baseUrl}/users?search=${encodeURIComponent(email)}`, { headers: { Cookie: sessionCookie } });
+    assert.equal(reread.status, 200);
+    const persisted = await reread.json() as Array<{ id: string; role: string; status: string }>;
+    assert.equal(persisted.length, 1);
+    assert.equal(persisted[0].role, "Faculty");
+    assert.equal(persisted[0].status, "Active");
+
+    const coursesResponse = await fetch(`${baseUrl}/curriculum/list`);
+    assert.equal(coursesResponse.status, 200);
+    const courses = await coursesResponse.json() as Array<{ id: string }>;
+    assert.ok(courses.length > 0, "seeded curriculum should contain courses");
+    const selectedCourseIds = courses.slice(0, 2).map((course) => course.id);
+    const enrollmentUpdate = await fetch(`${baseUrl}/users/${importedUserId}/enrollments`, {
+      method: "PUT",
       headers: { "Content-Type": "application/json", Cookie: sessionCookie },
-      body: JSON.stringify({ group: user.group }),
+      body: JSON.stringify({ courseIds: selectedCourseIds }),
     });
-    assert.equal(restored.status, 200);
-    assert.equal((await restored.json()).group, user.group);
-    if (temporaryGroupId) {
-      const deletedGroup = await fetch(`${baseUrl}/curriculum/groups/${temporaryGroupId}`, {
-        method: "DELETE",
-        headers: { Cookie: sessionCookie },
-      });
-      assert.equal(deletedGroup.status, 200);
+    assert.equal(enrollmentUpdate.status, 200);
+
+    const enrollments = await fetch(`${baseUrl}/users/${importedUserId}/enrollments`, { headers: { Cookie: sessionCookie } });
+    assert.equal(enrollments.status, 200);
+    assert.deepEqual(
+      (await enrollments.json() as Array<{ courseId: string }>).map((row) => row.courseId).sort(),
+      [...selectedCourseIds].sort(),
+    );
+
+    const audits = await fetch(`${baseUrl}/users/imports`, { headers: { Cookie: sessionCookie } });
+    assert.equal(audits.status, 200);
+    const auditRows = await audits.json() as Array<{ id: string; filename: string }>;
+    assert.ok(auditRows.some((row) => row.id === firstResult.id && row.filename === filename));
+    assert.ok(auditRows.some((row) => row.id === secondResult.id && row.filename === filename));
+
+    const groupCatalog = await fetch(`${baseUrl}/curriculum/groups`);
+    assert.equal(groupCatalog.status, 200);
+    const existingGroups = await groupCatalog.json() as Array<{ id: string; name: string }>;
+    temporaryGroupId = existingGroups.find((row) => row.name === group)?.id ?? null;
+    assert.ok(temporaryGroupId, "import should create its missing group");
+  } finally {
+    if (importedUserId || temporaryGroupId) {
+      if (importedUserId && !/^u-import-[0-9a-f-]+$/.test(importedUserId)) throw new Error("Unexpected test user ID");
+      if (temporaryGroupId && !/^g-import-[0-9a-f-]+$/.test(temporaryGroupId)) throw new Error("Unexpected test group ID");
+      const cleanupSql = [
+        importedUserId ? `DELETE FROM users WHERE id = '${importedUserId}';` : "",
+        temporaryGroupId ? `DELETE FROM groups WHERE id = '${temporaryGroupId}';` : "",
+      ].filter(Boolean).join("\n");
+      const cleanup = spawnSync("psql", [process.env.DATABASE_URL ?? ""], { input: cleanupSql, encoding: "utf8" });
+      assert.equal(cleanup.status, 0, cleanup.stderr);
     }
   }
 });

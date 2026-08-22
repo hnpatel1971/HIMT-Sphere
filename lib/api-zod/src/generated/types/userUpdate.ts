@@ -8,12 +8,11 @@
 import type { UserRole } from './userRole';
 import type { UserStatus } from './userStatus';
 
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  group: string;
-  status: UserStatus;
-  lastActivity: string;
+export interface UserUpdate {
+  /** @minLength 1 */
+  name?: string;
+  role?: UserRole;
+  /** @minLength 1 */
+  group?: string;
+  status?: UserStatus;
 }

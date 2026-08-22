@@ -63,17 +63,17 @@ import {
   ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileSearch, FileText, FileUp, Filter, GraduationCap,
   GripVertical, Layers, LayoutDashboard, LayoutGrid, LifeBuoy, ListChecks, LockKeyhole, Map, Menu, MoreHorizontal, Pencil,
   MinusCircle, Plus, RefreshCw, Route as RouteIcon, Scissors, Search, Settings2, ShieldCheck, SlidersHorizontal,
-  Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
+  Send, Sparkles, Tag, Trash2, TrendingUp, Upload, Users, Video, X
 } from 'lucide-react';
 import {
   getGetAnalyticsOverviewQueryKey, getGetCourseQueryKey, getGetDashboardQueryKey,
   getGetCurriculumCourseOutlineQueryKey, getListAnnouncementsQueryKey, getListAssignmentsQueryKey,
   getListCertificatesQueryKey, getListCoursesQueryKey, getListProgrammeCoursesQueryKey,
-  getListProgrammesQueryKey, getListSessionsQueryKey, getListUsersQueryKey,
+  getListProgrammesQueryKey, getListSessionsQueryKey,
   useAddCourseOutcome, useCreateAssignment, useCreateCourse, useGetAnalyticsOverview,
-  useGetCourse, useGetCurriculumCourseOutline, useGetDashboard, useImportUsers,
+  useGetCourse, useGetCurriculumCourseOutline, useGetDashboard,
   useListAnnouncements, useListAssignments, useListCertificates, useListCourses,
-  useListProgrammeCourses, useListProgrammes, useListSessions, useListUsers, useUpdateUserGroup
+  useListProgrammeCourses, useListProgrammes, useListSessions
 } from '@workspace/api-client-react';
 import type {
   Activity as ActivityType, AnalyticsOverview, Assignment, Certificate, Course, CourseDetail,
@@ -940,7 +940,7 @@ function InfoLine({ label, value }: { label: string; value: string }) { return <
 
 function AssignmentsPage() {
   const [status, setStatus] = useState(''); const [open, setOpen] = useState(false); const query = useListAssignments({ status: status || undefined }, { query: { queryKey: getListAssignmentsQueryKey({ status: status || undefined }) } }); const assignments = (query.data as Assignment[] | undefined) ?? [];
-  return <div><PageHeading eyebrow="Work queue" title="Assignments" description="Keep submissions, reviews and due dates visible in one calm queue." action={<Button testId="button-create-assignment" onClick={() => setOpen(true)}><Plus size={16} /> New assignment</Button>} /><div className="mb-6 flex items-center justify-between gap-3"><div className="flex gap-1 rounded-xl bg-muted p-1">{['', 'pending', 'submitted', 'overdue'].map((item) => <button key={item || 'all'} data-testid={`button-assignment-filter-${item || 'all'}`} onClick={() => setStatus(item)} className={cx('rounded-lg px-3 py-2 text-xs font-semibold capitalize', status === item ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground')}>{item || 'All'}</button>)}</div><Button testId="button-assignment-filter-menu" variant="quiet"><Filter size={15} /> <span className="hidden sm:inline">Filter</span></Button></div>{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : assignments.length === 0 ? <EmptyPanel icon={ClipboardCheck} title="The queue is clear" description="No assignments are waiting in this view. A focused day ahead." action={<Button testId="button-empty-create-assignment" onClick={() => setOpen(true)}><Plus size={15} /> Add assignment</Button>} /> : <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-xs"><table className="w-full min-w-[700px] text-left"><thead><tr className="border-b border-border bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><th className="px-5 py-4">Assignment</th><th className="px-5 py-4">Course</th><th className="px-5 py-4">Due</th><th className="px-5 py-4">Assessor</th><th className="px-5 py-4">Status</th><th className="px-5 py-4" /></tr></thead><tbody className="divide-y divide-border">{assignments.map((assignment) => { const isHigh = assignment.priority.toLowerCase().includes('high'); const isMed = assignment.priority.toLowerCase().includes('medium'); return <tr key={assignment.id} data-testid={`row-assignment-${assignment.id}`} className="hover:bg-muted/30"><td className="px-5 py-4"><div className="flex items-center gap-3"><span className={cx('h-2 w-2 rounded-full', isHigh ? 'bg-destructive' : isMed ? 'bg-amber-500' : 'bg-primary')} /><div><p className="text-sm font-bold">{assignment.title}</p><p className="mt-1 text-xs text-muted-foreground">{assignment.submitted ? 'Submitted for review' : 'Learner submission'}</p></div></div></td><td className="px-5 py-4 text-sm text-muted-foreground">{assignment.course}</td><td className="px-5 py-4 text-[11px] font-semibold">{niceDate(assignment.dueDate)}</td><td className="px-5 py-4 text-sm">{assignment.assessor}</td><td className="px-5 py-4"><Pill>{assignment.status}</Pill></td><td className="px-5 py-4 text-right"><button data-testid={`button-assignment-more-${assignment.id}`} aria-label={`More actions for ${assignment.title}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button></td></tr>; })}</tbody></table></div>}{open && <AssignmentForm onClose={() => setOpen(false)} />}</div>;
+  return <div><PageHeading eyebrow="Work queue" title="Assignments" description="Keep submissions, reviews and due dates visible in one calm queue." action={<Button testId="button-create-assignment" onClick={() => setOpen(true)}><Plus size={16} /> New assignment</Button>} /><div className="mb-6 flex items-center justify-between gap-3"><div className="flex gap-1 rounded-xl bg-muted p-1">{['', 'pending', 'submitted', 'overdue'].map((item) => <button key={item || 'all'} data-testid={`button-assignment-filter-${item || 'all'}`} onClick={() => setStatus(item)} className={cx('rounded-lg px-3 py-2 text-xs font-semibold capitalize', status === item ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground')}>{item || 'All'}</button>)}</div><Button testId="button-assignment-filter-menu" variant="quiet"><Filter size={15} /> <span className="hidden sm:inline">Filter</span></Button></div>{query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> : assignments.length === 0 ? <EmptyPanel icon={ClipboardCheck} title="The queue is clear" description="No assignments are waiting in this view. A focused day ahead." action={<Button testId="button-empty-create-assignment" onClick={() => setOpen(true)}><Plus size={15} /> Add assignment</Button>} /> : <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-xs"><table className="w-full min-w-[700px] text-left"><thead><tr className="border-b border-border bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><th className="px-4 py-3">Assignment</th><th className="px-4 py-3">Course</th><th className="px-4 py-3">Due</th><th className="px-4 py-3">Assessor</th><th className="px-4 py-3">Status</th><th className="px-4 py-3" /></tr></thead><tbody className="divide-y divide-border">{assignments.map((assignment) => { const isHigh = assignment.priority.toLowerCase().includes('high'); const isMed = assignment.priority.toLowerCase().includes('medium'); return <tr key={assignment.id} data-testid={`row-assignment-${assignment.id}`} className="hover:bg-muted/30"><td className="px-4 py-3"><div className="flex items-center gap-3"><span className={cx('h-2 w-2 rounded-full', isHigh ? 'bg-destructive' : isMed ? 'bg-amber-500' : 'bg-primary')} /><div><p className="text-sm font-bold">{assignment.title}</p><p className="mt-1 text-xs text-muted-foreground">{assignment.submitted ? 'Submitted for review' : 'Learner submission'}</p></div></div></td><td className="px-4 py-3 text-sm text-muted-foreground">{assignment.course}</td><td className="px-4 py-3 text-[11px] font-semibold">{niceDate(assignment.dueDate)}</td><td className="px-4 py-3 text-sm">{assignment.assessor}</td><td className="px-4 py-3"><Pill>{assignment.status}</Pill></td><td className="px-4 py-3 text-right"><button data-testid={`button-assignment-more-${assignment.id}`} aria-label={`More actions for ${assignment.title}`} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button></td></tr>; })}</tbody></table></div>}{open && <AssignmentForm onClose={() => setOpen(false)} />}</div>;
 }
 function AssignmentForm({ onClose }: { onClose: () => void }) { const create = useCreateAssignment(); const [form, setForm] = useState({ title: '', course: '', dueDate: '', assessor: '' }); const submit = (e: FormEvent) => { e.preventDefault(); create.mutate({ data: form }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListAssignmentsQueryKey() }); onClose(); } }); }; return <Modal title="New assignment" onClose={onClose}><form onSubmit={submit} className="space-y-4"><Field label="Assignment title"><input required data-testid="input-assignment-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="form-input" placeholder="e.g. Navigation watch report" /></Field><Field label="Course"><input required data-testid="input-assignment-course" value={form.course} onChange={(e) => setForm({ ...form, course: e.target.value })} className="form-input" placeholder="Course name or code" /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Due date"><input required type="date" data-testid="input-assignment-due-date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} className="form-input" /></Field><Field label="Assessor"><input required data-testid="input-assignment-assessor" value={form.assessor} onChange={(e) => setForm({ ...form, assessor: e.target.value })} className="form-input" /></Field></div><div className="flex justify-end gap-2 pt-3"><Button testId="button-cancel-assignment" variant="quiet" onClick={onClose}>Cancel</Button><Button testId="button-submit-assignment" type="submit" disabled={create.isPending}>{create.isPending ? 'Saving…' : 'Create assignment'}</Button></div></form></Modal>; }
 
@@ -952,257 +952,565 @@ function CertificateCard({ certificate, index }: { certificate: Certificate; ind
 
 function AnalyticsPage() { const query = useGetAnalyticsOverview({ query: { queryKey: getGetAnalyticsOverviewQueryKey() } }); const data = query.data as AnalyticsOverview | undefined; if (query.isLoading) return <LoadingPanel />; if (query.isError || !data) return <ErrorPanel onRetry={() => query.refetch()} />; const maxWeekly = Math.max(...data.weeklyActivity.map((item) => item.value), 1); return <div><PageHeading eyebrow="Operations intelligence" title="Analytics" description="A measured view of learner momentum, course performance and the work still to review." action={<Button testId="button-export-analytics" variant="outline"><Download size={16} /> Export report</Button>} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Active learners" value={data.activeLearners} hint="Across all programmes" icon={Users} /><MetricCard label="Completion rate" value={`${data.completionRate}%`} hint="All active courses" icon={TrendingUp} /><MetricCard label="Average progress" value={`${data.averageProgress}%`} hint="Current cohort" icon={Activity} /><MetricCard label="Pending reviews" value={data.pendingReviews} hint="Faculty queue" icon={ClipboardCheck} /></div><div className="mt-7 grid gap-7 xl:grid-cols-[1.25fr_1fr]"><section className="rounded-xl border border-border bg-card shadow-xs p-6"><SectionTitle title="Weekly activity" meta="Last 7 weeks" /><div className="mt-8 flex h-64 items-end gap-2 sm:gap-4">{data.weeklyActivity.map((point) => <div key={point.label} className="group flex flex-1 flex-col items-center gap-2"><div className="relative flex h-52 w-full items-end"><div className="w-full rounded-t-sm bg-primary transition-all duration-500 group-hover:bg-primary/80" style={{ height: `${Math.max(5, point.value / maxWeekly * 100)}%` }} /></div><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{point.label}</span></div>)}</div></section><section className="rounded-xl border border-border bg-card shadow-xs p-6"><SectionTitle title="Course performance" meta="Completion by route" /><div className="mt-6 space-y-5">{data.coursePerformance.map((point, index) => <div key={point.label}><div className="mb-2 flex justify-between gap-3 text-xs"><span className="truncate font-semibold">{point.label}</span><span className="font-semibold text-muted-foreground">{point.value}%</span></div><ProgressBar value={point.value} accent={index % 2 ? 'bg-[hsl(168_91%_25%)]' : 'bg-primary'} /></div>)}</div></section></div></div>; }
 
-function UsersPage() {
-  const query        = useListUsers({ query: { queryKey: getListUsersQueryKey() } });
-  const importUsers  = useImportUsers();
-  const updateGroup  = useUpdateUserGroup();
-  const { toast }    = useToast();
-  const { data: groupData, loading: groupsLoading, error: groupsError } = useApi<GroupRow[]>('/curriculum/groups');
+type DirectoryUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  group: string;
+  status: string;
+  lastActivity: string;
+};
 
-  // ── Local state ────────────────────────────────────────────────────────────
-  const [search,       setSearch]       = useState('');
-  const [openImport,   setOpenImport]   = useState(false);
-  const [notice,       setNotice]       = useState('');
-  const [roleFilter,   setRoleFilter]   = useState('');
-  const [editingUser,  setEditingUser]  = useState<User | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState('');
+type Group = {
+  id: string;
+  name: string;
+};
 
-  // Admin auth (same flow as CurriculumCoursesPage)
-  const [isAdmin,      setIsAdmin]      = useState<boolean | null>(null);
-  const [showLogin,    setShowLogin]    = useState(false);
-  const [loginUser,    setLoginUser]    = useState('');
-  const [loginPass,    setLoginPass]    = useState('');
-  const [loginBusy,    setLoginBusy]    = useState(false);
-  const [loginError,   setLoginError]   = useState('');
-  const [pendingSync,  setPendingSync]  = useState(false);
+function parseCSV(text: string): Record<string, string>[] {
+  const rawRows: string[][] = [];
+  let row: string[] = [];
+  let current = '';
+  let inQuotes = false;
 
-  // Sync state
-  const [syncing, setSyncing] = useState(false);
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1];
 
-  // Check session on mount
-  useEffect(() => {
-    apiFetch<{ isAdmin: boolean }>('/auth/status')
-      .then(r => setIsAdmin(r.isAdmin))
-      .catch(() => setIsAdmin(false));
-  }, []);
-
-  const users = ((query.data as User[] | undefined) ?? []).filter(u => {
-    const text = `${u.name} ${u.email} ${u.role}`.toLowerCase();
-    if (search && !text.includes(search.toLowerCase())) return false;
-    if (roleFilter && u.role.toLowerCase() !== roleFilter.toLowerCase()) return false;
-    return true;
-  });
-  const groups = [...(groupData ?? [])].sort((a, b) => a.name.localeCompare(b.name));
-
-  useEffect(() => {
-    if (!editingUser || selectedGroup || !groupData?.length) return;
-    const currentGroup = groupData.find((group) => group.name === editingUser.group)?.name;
-    setSelectedGroup(currentGroup || [...groupData].sort((a, b) => a.name.localeCompare(b.name))[0]?.name || '');
-  }, [editingUser, groupData, selectedGroup]);
-
-  function openGroupEditor(user: User) {
-    setEditingUser(user);
-    setSelectedGroup(groups.find((group) => group.name === user.group)?.name || groups[0]?.name || '');
+    if (inQuotes) {
+      if (c === '"' && next === '"') {
+        current += '"';
+        i++;
+      } else if (c === '"') {
+        inQuotes = false;
+      } else {
+        current += c;
+      }
+    } else {
+      if (c === '"') {
+        inQuotes = true;
+      } else if (c === ',') {
+        row.push(current);
+        current = '';
+      } else if (c === '\n' || (c === '\r' && next === '\n')) {
+        row.push(current);
+        rawRows.push(row);
+        row = [];
+        current = '';
+        if (c === '\r') i++;
+      } else if (c !== '\r') {
+        current += c;
+      }
+    }
+  }
+  if (current || row.length > 0) {
+    row.push(current);
+    rawRows.push(row);
   }
 
-  function saveGroupChange(e: FormEvent) {
+  if (rawRows.length < 2) return [];
+  const headers = rawRows[0].map((h: string) => h.trim().toLowerCase());
+  return rawRows.slice(1).map(r => {
+    const obj: Record<string, string> = {};
+    headers.forEach((h: string, i: number) => { obj[h] = r[i]?.trim() || ''; });
+    return obj;
+  }).filter(obj => Object.keys(obj).some(k => obj[k]));
+}
+
+function UserFormModal({ user, groups, onClose, onSaved }: { user?: DirectoryUser | null; groups: Group[]; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(user?.name || '');
+  const [email, setEmail] = useState(user?.email || '');
+  const [role, setRole] = useState(user?.role || 'Learner');
+  const [group, setGroup] = useState(user?.group || (groups[0]?.name || ''));
+  const [status, setStatus] = useState(user?.status || 'Active');
+  const [busy, setBusy] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const { toast } = useToast();
+
+  const isEdit = !!user;
+
+  async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!isAdmin || !editingUser || !selectedGroup) return;
-    updateGroup.mutate(
-      { userId: editingUser.id, data: { group: selectedGroup } },
-      {
-        onSuccess: (updatedUser) => {
-          queryClient.setQueryData<User[]>(getListUsersQueryKey(), (current) =>
-            current?.map((user) => user.id === updatedUser.id ? updatedUser : user) ?? [updatedUser],
-          );
-          setEditingUser(null);
-          toast({ title: 'Group updated', description: `${updatedUser.name} is now in ${updatedUser.group}.` });
-        },
-        onError: (error) => {
-          toast({ title: 'Could not update group', description: error.message, variant: 'destructive' });
-        },
-      },
-    );
+    setBusy(true);
+    try {
+      if (isEdit) {
+        await apiFetch(`/users/${user.id}`, 'PATCH', { name, role, group, status });
+        toast({ title: 'User updated' });
+      } else {
+        const created = await apiFetch<{ invitationSent: boolean; accountExists: boolean }>('/users', 'POST', { name, email, role, group });
+        toast({
+          title: created.invitationSent ? 'Invitation sent' : created.accountExists ? 'User linked' : 'Invitation already pending',
+          description: created.invitationSent
+            ? `Clerk sent an account invitation to ${email}.`
+            : created.accountExists
+              ? `${email} already has a Clerk account and is now active.`
+              : `${email} already has a pending Clerk invitation.`,
+        });
+      }
+      onSaved();
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
   }
 
-  // ── Import (CSV stub) ──────────────────────────────────────────────────────
-  const submitImport = () => {
-    importUsers.mutate(
-      { data: { filename: 'himt-learners.csv', rows: 24 } },
-      { onSuccess: (result) => {
-          setNotice(`${result.valid} records ready · ${result.warnings} warnings`);
-          setOpenImport(false);
-          queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
-        },
-      },
-    );
+  async function sendInvitation() {
+    if (!user) return;
+    setInviting(true);
+    try {
+      const result = await apiFetch<{ sent: boolean; accountExists: boolean }>(`/users/${user.id}/invite`, 'POST');
+      toast({
+        title: result.sent ? 'Invitation sent' : 'Account already active',
+        description: result.sent
+          ? `Clerk sent a fresh invitation to ${user.email}.`
+          : `${user.email} already has a Clerk account. Password recovery is available from Sign in.`,
+      });
+      onSaved();
+    } catch (error) {
+      toast({ title: 'Invitation failed', description: error instanceof Error ? error.message : String(error), variant: 'destructive' });
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  return (
+    <Modal title={isEdit ? 'Edit User' : 'Add User'} onClose={onClose}>
+      {!isEdit && (
+        <div className="mb-5 rounded-lg border border-primary/30 bg-primary/10 p-3 text-sm text-primary font-medium">
+          Clerk emails new users a secure invitation. They accept it through the <Link href="/sign-up" className="underline hover:text-primary">Sign up</Link> flow; passwords and recovery stay with Clerk.
+        </div>
+      )}
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="Name"><input required className="form-input" value={name} onChange={e => setName(e.target.value)} /></Field>
+        <Field label="Email"><input required type="email" className="form-input" disabled={isEdit} value={email} onChange={e => setEmail(e.target.value)} /></Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Role">
+            <select className="form-input" value={role} onChange={e => setRole(e.target.value)}>
+              <option value="Learner">Learner</option>
+              <option value="Faculty">Faculty</option>
+              <option value="Admin">Admin</option>
+            </select>
+          </Field>
+          <Field label="Group">
+            <select className="form-input" value={group} onChange={e => setGroup(e.target.value)}>
+              {groups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+              {groups.length === 0 && <option value="">No groups</option>}
+            </select>
+          </Field>
+        </div>
+        {isEdit && (
+          <Field label="Status">
+            <select className="form-input" value={status} onChange={e => setStatus(e.target.value)}>
+              <option value="Active">Active</option>
+              <option value="Pending">Pending invite</option>
+              <option value="Invited">Invited</option>
+              <option value="Suspended">Suspended</option>
+            </select>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">If a user needs to reset access, direct them to the <Link href="/sign-in" className="underline hover:text-foreground">Sign in</Link> flow.</p>
+          </Field>
+        )}
+        {isEdit && (user.status === 'Pending' || user.status === 'Invited') && (
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <div>
+              <p className="text-xs font-bold text-amber-900">{user.status === 'Pending' ? 'Ready to invite' : 'Invitation pending'}</p>
+              <p className="mt-0.5 text-[11px] text-amber-800">
+                {user.status === 'Pending' ? 'Send this imported user a secure Clerk invitation.' : 'Send a fresh invitation if the original email expired.'}
+              </p>
+            </div>
+            <Button testId="resend-user-invitation" variant="outline" type="button" onClick={sendInvitation} disabled={inviting}>
+              {inviting ? 'Sending…' : user.status === 'Pending' ? 'Send invite' : 'Resend invite'}
+            </Button>
+          </div>
+        )}
+        <div className="mt-6 flex justify-end gap-2 pt-2">
+          <Button variant="quiet" type="button" onClick={onClose} testId="cancel-user">Cancel</Button>
+          <Button type="submit" disabled={busy} testId="save-user">{busy ? 'Saving...' : 'Save User'}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function EnrollmentsModal({ user, courses, onClose }: { user: DirectoryUser; courses: Course[]; onClose: () => void }) {
+  const [enrolled, setEnrolled] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    apiFetch<{courseId:string}[]>(`/users/${user.id}/enrollments`)
+      .then(res => setEnrolled(new Set(res.map(r => r.courseId))))
+      .catch(err => toast({ title: 'Could not load enrollments', description: err.message, variant: 'destructive' }))
+      .finally(() => setLoading(false));
+  }, [user.id, toast]);
+
+  const toggle = (id: string) => {
+    const next = new Set(enrolled);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setEnrolled(next);
   };
 
-  // ── TriByte sync ───────────────────────────────────────────────────────────
-  async function runSync() {
-    setSyncing(true);
+  const save = async () => {
+    setBusy(true);
     try {
-      const result = await apiFetch<{
-        usersAdded: number; usersUpdated: number; groupsImported: number;
-        totalUsers: number; usedStaticFallback: boolean;
-      }>('/users/sync-tribyte', 'POST');
-      await queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
-      const parts: string[] = [];
-      if (result.usersAdded   > 0) parts.push(`${result.usersAdded} users added`);
-      if (result.usersUpdated > 0) parts.push(`${result.usersUpdated} updated`);
-      if (result.groupsImported > 0) parts.push(`${result.groupsImported} new groups`);
-      if (parts.length === 0) parts.push('Already up to date');
-      toast({
-        title: 'Sync complete',
-        description: parts.join(' · ') + (result.usedStaticFallback ? ' (representative data — configure TriByte credentials for live sync)' : ''),
-      });
-    } catch (err) {
-      const msg = String(err);
-      if (msg.includes('401') || msg.includes('Unauthorized')) {
-        setIsAdmin(false); setShowLogin(true); setPendingSync(true);
-      } else {
-        toast({ title: 'Sync failed', description: msg, variant: 'destructive' });
+      await apiFetch(`/users/${user.id}/enrollments`, 'PUT', { courseIds: Array.from(enrolled) });
+      toast({ title: 'Enrollments updated' });
+      onClose();
+    } catch (e: any) {
+      toast({ title: 'Failed to update', description: e.message, variant: 'destructive' });
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Enrollments: ${user.name}`} onClose={onClose}>
+      {loading ? <div className="py-8 text-center text-sm font-medium text-muted-foreground flex items-center justify-center gap-2"><RefreshCw size={16} className="animate-spin" /> Loading enrollments...</div> : (
+        <>
+          <div className="mb-6 max-h-[50vh] overflow-y-auto rounded-xl border border-border shadow-inner bg-muted/20">
+            {courses.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">No courses available in curriculum.</div>
+            ) : (
+              <div className="divide-y divide-border">
+                {courses.map(c => (
+                  <label key={c.id} className="flex cursor-pointer items-center gap-4 p-4 hover:bg-muted/60 transition-colors">
+                    <input type="checkbox" checked={enrolled.has(c.id)} onChange={() => toggle(c.id)} className="h-4 w-4 rounded border-border" />
+                    <div>
+                      <div className="text-sm font-semibold">{c.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">{c.status}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="quiet" onClick={onClose} testId="cancel-enrollments">Cancel</Button>
+            <Button onClick={save} disabled={busy} testId="save-enrollments">{busy ? 'Saving...' : 'Save Enrollments'}</Button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ImportModal({ onClose, onImported }: { onClose: () => void; onImported: (result: any) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const { toast } = useToast();
+
+  const handleImport = async () => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (rows.length === 0) throw new Error("No valid rows found in CSV");
+      if (!Object.prototype.hasOwnProperty.call(rows[0], 'name') || !Object.prototype.hasOwnProperty.call(rows[0], 'email')) {
+        throw new Error("CSV must have 'name' and 'email' columns");
       }
-    } finally { setSyncing(false); }
-  }
 
-  function handleSyncTriByte() {
-    if (!isAdmin) { setShowLogin(true); setPendingSync(true); return; }
-    void runSync();
-  }
+      const res = await apiFetch<any>('/users/import', 'POST', { filename: file.name, rows });
+      onImported(res);
+    } catch (e: any) {
+      toast({ title: 'Import failed', description: e.message, variant: 'destructive' });
+      setBusy(false);
+    }
+  };
 
-  // ── Admin login submit ─────────────────────────────────────────────────────
+  return (
+    <Modal title="Import CSV" onClose={onClose}>
+       <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
+         <span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary border border-primary/20 shadow-sm"><FileUp size={22} /></span>
+         <h3 className="mt-4 text-lg font-bold">Upload CSV roster</h3>
+         <p className="mt-1 text-sm text-muted-foreground mb-6">Required headers: name and email. Role, group, and status are optional.</p>
+         <input type="file" accept=".csv" onChange={e => setFile(e.target.files?.[0] || null)} className="mx-auto block text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 file:cursor-pointer file:transition-colors cursor-pointer" />
+       </div>
+       <div className="mt-6 flex justify-end gap-2 pt-2">
+         <Button variant="quiet" onClick={onClose} testId="cancel-import">Cancel</Button>
+         <Button onClick={handleImport} disabled={!file || busy} testId="submit-import">{busy ? 'Importing...' : 'Start Import'}</Button>
+       </div>
+    </Modal>
+  );
+}
+
+function UsersPage() {
+  const { toast } = useToast();
+
+  // Auth & Session
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginUser, setLoginUser] = useState('');
+  const [loginPass, setLoginPass] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState('');
+
+  // Data
+  const [users, setUsers] = useState<DirectoryUser[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Filters
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [groupFilter, setGroupFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+
+  // Modals & UI States
+  const [createModal, setCreateModal] = useState(false);
+  const [editUser, setEditUser] = useState<DirectoryUser | null>(null);
+  const [importModal, setImportModal] = useState(false);
+  const [enrollUser, setEnrollUser] = useState<DirectoryUser | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [invitingPending, setInvitingPending] = useState(false);
+  const [notice, setNotice] = useState('');
+
+  const checkAuth = useCallback(async () => {
+    try {
+      const res = await apiFetch<{ isAdmin: boolean }>('/auth/status');
+      setIsAdmin(res.isAdmin);
+      if (!res.isAdmin) {
+        setLoading(false);
+        setShowLogin(true);
+      }
+    } catch {
+      setIsAdmin(false);
+      setLoading(false);
+      setShowLogin(true);
+    }
+  }, []);
+
+  useEffect(() => { checkAuth(); }, [checkAuth]);
+
+  const loadData = useCallback(async () => {
+    if (!isAdmin) return;
+    setLoading(true);
+    try {
+      const [u, g, c] = await Promise.all([
+        apiFetch<DirectoryUser[]>('/users'),
+        apiFetch<Group[]>('/curriculum/groups'),
+        apiFetch<Course[]>('/curriculum/list').catch(() => [] as Course[])
+      ]);
+      setUsers(u);
+      setGroups(g);
+      setCourses(c);
+    } catch (e: any) {
+      toast({ title: 'Failed to load data', description: e.message, variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  }, [isAdmin, toast]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
   async function handleAdminLogin(e: FormEvent) {
     e.preventDefault();
     setLoginBusy(true); setLoginError('');
     try {
       await apiFetch('/auth/login', 'POST', { username: loginUser, password: loginPass });
-      setIsAdmin(true); setShowLogin(false); setLoginUser(''); setLoginPass('');
-      if (pendingSync) { setPendingSync(false); void runSync(); }
-    } catch (err) {
+      setIsAdmin(true);
+      setShowLogin(false);
+      setLoginUser('');
+      setLoginPass('');
+    } catch (err: any) {
       setLoginError(String(err).replace(/^Error:\s*/, ''));
-    } finally { setLoginBusy(false); }
+    } finally {
+      setLoginBusy(false);
+    }
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      const res = await apiFetch<any>('/users/sync-tribyte', 'POST');
+      setNotice(`TriByte sync: ${res.usersAdded || 0} added as pending, ${res.usersUpdated || 0} updated, ${res.groupsImported || 0} groups.`);
+      loadData();
+    } catch (e: any) {
+      toast({ title: 'Sync failed', description: e.message, variant: 'destructive' });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleInvitePending() {
+    const pendingCount = users.filter((user) => user.status === 'Pending').length;
+    if (!pendingCount || !window.confirm(`Send Clerk invitation emails to ${pendingCount} pending user${pendingCount === 1 ? '' : 's'}?`)) return;
+    setInvitingPending(true);
+    try {
+      const result = await apiFetch<{ sent: number; activated: number; failed: number }>('/users/invite-pending', 'POST');
+      setNotice(`Clerk invitations: ${result.sent} sent, ${result.activated} existing accounts activated, ${result.failed} failed.`);
+      await loadData();
+    } catch (error) {
+      toast({ title: 'Invitations failed', description: error instanceof Error ? error.message : String(error), variant: 'destructive' });
+    } finally {
+      setInvitingPending(false);
+    }
+  }
+
+  const displayedUsers = users.filter(u => {
+    if (search && !`${u.name} ${u.email}`.toLowerCase().includes(search.toLowerCase())) return false;
+    if (roleFilter && u.role !== roleFilter) return false;
+    if (groupFilter && u.group !== groupFilter) return false;
+    if (statusFilter && u.status !== statusFilter) return false;
+    return true;
+  });
+
   return (
     <div>
       <PageHeading
         eyebrow="People & access"
         title="Users & roles"
-        description="Keep learner, faculty and operations access aligned with the right programme group."
+        description="Keep learner, faculty, and operations access aligned. Real-time sync with TriByte and Clerk."
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button testId="button-import-users" variant="outline" onClick={() => setOpenImport(true)}>
-              <Upload size={16} /> Import users
+            <Button testId="btn-sync-tribyte" variant="outline" onClick={handleSync} disabled={syncing || !isAdmin}>
+              <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync TriByte'}
+            </Button>
+            <Button testId="btn-import-users" variant="outline" onClick={() => setImportModal(true)} disabled={!isAdmin}>
+              <Upload size={16} /> Import
             </Button>
             <Button
-              testId="button-sync-users-tribyte"
+              testId="btn-invite-pending-users"
               variant="outline"
-              onClick={handleSyncTriByte}
-              disabled={syncing}
+              onClick={handleInvitePending}
+              disabled={!isAdmin || invitingPending || !users.some((user) => user.status === 'Pending')}
             >
-              <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />
-              {syncing ? 'Syncing…' : 'Sync from TriByte'}
+              <Send size={16} /> {invitingPending ? 'Sending...' : 'Invite pending'}
+            </Button>
+            <Button testId="btn-create-user" onClick={() => setCreateModal(true)} disabled={!isAdmin}>
+              <Plus size={16} /> Add User
             </Button>
           </div>
         }
       />
 
       {notice && (
-        <div data-testid="status-import-result" className="mb-5 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/10 p-3 text-sm font-semibold text-primary">
-          <Check size={16} /> {notice}
-          <button data-testid="button-dismiss-import-result" onClick={() => setNotice('')} className="ml-auto"><X size={15} /></button>
+        <div data-testid="status-notice" className="mb-5 flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm font-semibold text-primary">
+          <Check size={18} /> {notice}
+          <button data-testid="btn-dismiss-notice" onClick={() => setNotice('')} className="ml-auto rounded-md p-1 hover:bg-primary/20"><X size={15} /></button>
         </div>
       )}
 
-      {/* Filters */}
+      <section aria-label="Role capabilities" className="mb-6 grid gap-3 md:grid-cols-3">
+        {[
+          { role: 'Admin', icon: ShieldCheck, detail: 'Manage people, groups, TriByte imports, roles, status, and course access.' },
+          { role: 'Faculty', icon: GraduationCap, detail: 'Manage learning groups and teach assigned cohorts, without access to people, imports, or enrollment controls.' },
+          { role: 'Learner', icon: BookOpen, detail: 'Open only assigned courses. Suspended learners are denied protected content.' },
+        ].map(({ role, icon: Icon, detail }) => (
+          <article key={role} className="rounded-xl border border-border bg-card p-4 shadow-xs">
+            <div className="flex items-center gap-2 text-primary">
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10"><Icon size={16} /></span>
+              <h2 className="text-sm font-bold text-foreground">{role}</h2>
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{detail}</p>
+          </article>
+        ))}
+      </section>
+
+      {isAdmin === false && !showLogin && (
+        <div className="mb-6 flex flex-col items-start justify-between gap-4 rounded-xl border border-border bg-card p-5 shadow-xs sm:flex-row sm:items-center">
+          <div>
+            <h2 className="font-bold">Admin session required</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Directory data and access controls stay hidden until an HIMT administrator signs in.</p>
+          </div>
+          <Button testId="button-open-users-admin-login" onClick={() => setShowLogin(true)}><LockKeyhole size={15} /> Sign in</Button>
+        </div>
+      )}
+
       <div className="mb-6 flex flex-col gap-3 sm:flex-row rounded-xl border border-border shadow-xs bg-card p-3">
         <label className="relative flex flex-1 items-center">
           <Search size={17} className="absolute left-3 text-muted-foreground" />
           <input
-            data-testid="input-search-users"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search people, email or role"
+            placeholder="Search name or email"
             className="h-10 w-full rounded-lg bg-muted/60 pl-10 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/30"
           />
         </label>
         <label className="flex items-center gap-2 rounded-lg bg-muted/60 px-3">
-          <Filter size={15} className="text-muted-foreground" />
-          <select
-            data-testid="select-role-filter"
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
-            className="h-10 bg-transparent text-sm font-semibold outline-none"
-          >
-            <option value="">All roles</option>
-            <option value="admin">Admin</option>
-            <option value="faculty">Faculty</option>
-            <option value="student">Student</option>
+          <ShieldCheck size={15} className="text-muted-foreground" />
+          <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} className="h-10 bg-transparent text-sm font-semibold outline-none w-full appearance-none">
+            <option value="">All Roles</option>
+            <option value="Admin">Admin</option>
+            <option value="Faculty">Faculty</option>
+            <option value="Learner">Learner</option>
           </select>
         </label>
-        <span className="hidden items-center rounded-lg bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground sm:flex">
-          {users.length} {users.length === 1 ? 'person' : 'people'}
-        </span>
+        <label className="flex items-center gap-2 rounded-lg bg-muted/60 px-3">
+          <Layers size={15} className="text-muted-foreground" />
+          <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className="h-10 bg-transparent text-sm font-semibold outline-none w-full appearance-none">
+            <option value="">All Groups</option>
+            {groups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 rounded-lg bg-muted/60 px-3">
+          <Activity size={15} className="text-muted-foreground" />
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-10 bg-transparent text-sm font-semibold outline-none w-full appearance-none">
+            <option value="">All Statuses</option>
+            <option value="Active">Active</option>
+            <option value="Pending">Pending invite</option>
+            <option value="Invited">Invited</option>
+            <option value="Suspended">Suspended</option>
+          </select>
+        </label>
       </div>
 
-      {query.isLoading ? <LoadingPanel /> : query.isError ? <ErrorPanel onRetry={() => query.refetch()} /> :
-        users.length === 0 ? (
+      {loading ? <LoadingPanel /> : (
+        displayedUsers.length === 0 ? (
           <EmptyPanel
             icon={Users}
             title="No users found"
-            description="Try a different search, or sync from TriByte to populate the roster."
+            description="Adjust your search filters or add a new user to the directory."
             action={
-              <Button testId="button-empty-sync-users" onClick={handleSyncTriByte} disabled={syncing}>
-                <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
-                {syncing ? 'Syncing…' : 'Sync from TriByte'}
-              </Button>
+               <Button testId="btn-empty-add" onClick={() => setCreateModal(true)} disabled={!isAdmin}>
+                 <Plus size={16} /> Add User
+               </Button>
             }
           />
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border shadow-xs bg-card">
-            <table className="w-full min-w-[720px] text-left">
+            <table className="w-full min-w-[800px] text-left">
               <thead>
                 <tr className="border-b border-border bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <th className="px-5 py-4">Person</th>
-                  <th className="px-5 py-4">Role</th>
-                  <th className="px-5 py-4">Group</th>
-                  <th className="px-5 py-4">Status</th>
-                  <th className="px-5 py-4">Last activity</th>
-                  <th />
+                  <th className="px-4 py-3">Person</th>
+                  <th className="px-4 py-3">Role</th>
+                  <th className="px-4 py-3">Group</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Last Activity</th>
+                  <th className="px-4 py-3 text-right">Manage</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {users.map((user) => (
-                  <tr key={user.id} data-testid={`row-user-${user.id}`} className="hover:bg-muted/30">
-                    <td className="px-5 py-4">
+                {displayedUsers.map((user) => (
+                  <tr key={user.id} className="hover:bg-muted/30 transition-colors group">
+                    <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <span className="grid h-9 w-9 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">{initials(user.name)}</span>
+                        <span className="grid h-10 w-10 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary shadow-sm border border-primary/20">{initials(user.name)}</span>
                         <div>
-                          <p className="text-sm font-bold">{user.name}</p>
+                          <p className="text-sm font-bold text-foreground">{user.name}</p>
                           <p className="text-xs text-muted-foreground">{user.email}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-5 py-4"><Pill>{user.role}</Pill></td>
-                    <td className="px-5 py-4">
-                      {isAdmin ? (
-                        <button
-                          type="button"
-                          data-testid={`button-edit-user-group-${user.id}`}
-                          onClick={() => openGroupEditor(user)}
-                          className="rounded-md px-1.5 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
-                          aria-label={`Change group for ${user.name}`}
-                        >
-                          {user.group || '—'}
-                        </button>
-                      ) : <span className="px-1.5 text-sm text-muted-foreground">{user.group || '—'}</span>}
+                    <td className="px-4 py-3"><span className="text-sm font-medium">{user.role}</span></td>
+                    <td className="px-4 py-3">
+                      {user.group ? (
+                         <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs font-medium text-foreground"><Tag size={12} className="text-muted-foreground" /> {user.group}</span>
+                      ) : <span className="text-xs text-muted-foreground">—</span>}
                     </td>
-                    <td className="px-5 py-4"><Pill>{user.status}</Pill></td>
-                    <td className="px-5 py-4 text-[11px] font-semibold text-muted-foreground">{niceDate(user.lastActivity)}</td>
-                    <td className="px-5 py-4 text-right">
-                      {isAdmin && <button data-testid={`button-user-more-${user.id}`} aria-label={`Change group for ${user.name}`} onClick={() => openGroupEditor(user)} className="rounded-lg p-2 hover:bg-muted"><MoreHorizontal size={16} /></button>}
+                    <td className="px-4 py-3"><Pill>{user.status}</Pill></td>
+                    <td className="px-4 py-3 text-[11px] font-semibold text-muted-foreground">{niceDate(user.lastActivity)}</td>
+                    <td className="px-4 py-3 text-right">
+                      {isAdmin && (
+                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button data-testid={`btn-edit-${user.id}`} aria-label={`Edit ${user.name}`} onClick={() => setEditUser(user)} className="rounded-lg p-2 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors tooltip-trigger" title="Edit Profile"><Pencil size={16} /></button>
+                          <button data-testid={`btn-enroll-${user.id}`} aria-label={`Enrollments for ${user.name}`} onClick={() => setEnrollUser(user)} className="rounded-lg p-2 hover:bg-muted text-muted-foreground hover:text-primary transition-colors tooltip-trigger" title="Manage Enrollments"><BookOpen size={16} /></button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1210,78 +1518,58 @@ function UsersPage() {
             </table>
           </div>
         )
-      }
-
-      {/* CSV Import modal */}
-      {openImport && (
-        <Modal title="Import user roster" onClose={() => setOpenImport(false)}>
-          <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
-            <span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary"><FileUp size={22} /></span>
-            <h3 className="mt-4 text-lg font-bold">Drop your CSV roster here</h3>
-            <p className="mt-1 text-sm text-muted-foreground">The preview will flag missing emails and unknown groups before import.</p>
-            <Button testId="button-select-user-file" variant="outline" onClick={submitImport} disabled={importUsers.isPending}>
-              {importUsers.isPending ? 'Importing…' : 'Choose CSV file'}
-            </Button>
-          </div>
-          <div className="mt-4 flex justify-end">
-            <Button testId="button-cancel-user-import" variant="quiet" onClick={() => setOpenImport(false)}>Cancel</Button>
-          </div>
-        </Modal>
       )}
 
-      {editingUser && isAdmin && (
-        <Modal title={`Change group for ${editingUser.name}`} onClose={() => setEditingUser(null)}>
-          <form onSubmit={saveGroupChange} className="space-y-5">
-            <p className="text-sm text-muted-foreground">Choose the existing group this person should belong to.</p>
-            <Field label="Group">
-              {groupsLoading ? (
-                <div className="form-input flex items-center text-sm text-muted-foreground">Loading groups…</div>
-              ) : groupsError ? (
-                <p className="rounded-lg bg-destructive/10 p-3 text-sm font-semibold text-destructive">Groups could not be loaded. Close this dialog and try again.</p>
-              ) : (
-                <select
-                  required
-                  data-testid="select-user-group"
-                  value={selectedGroup}
-                  onChange={(e) => setSelectedGroup(e.target.value)}
-                  className="form-input"
-                  disabled={groups.length === 0}
-                >
-                  {groups.length === 0 ? <option value="">No groups available</option> : groups.map((group) => <option key={group.id} value={group.name}>{group.name}</option>)}
-                </select>
-              )}
-            </Field>
-            {groups.length === 0 && !groupsLoading && !groupsError && <p className="text-sm text-muted-foreground">Create a group in Curriculum before assigning a learner.</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button testId="button-cancel-user-group" variant="quiet" type="button" onClick={() => setEditingUser(null)}>Cancel</Button>
-              <Button testId="button-save-user-group" type="submit" disabled={groupsLoading || Boolean(groupsError) || groups.length === 0 || !selectedGroup || updateGroup.isPending}>{updateGroup.isPending ? 'Saving…' : 'Save group'}</Button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {/* Admin login modal (for TriByte sync) */}
+      {/* Modals */}
       {showLogin && (
-        <Modal title="Admin login required" onClose={() => { setShowLogin(false); setPendingSync(false); }}>
-          <p className="mb-4 text-sm text-muted-foreground">Enter your HIMT admin credentials to sync users from TriByte.</p>
+        <Modal title="Admin Session Required" onClose={() => setShowLogin(false)}>
+          <p className="mb-6 text-sm text-muted-foreground">This workspace requires a verified operations session. Please sign in.</p>
           <form onSubmit={handleAdminLogin} className="space-y-4">
             <Field label="Username">
-              <input required data-testid="input-admin-username" value={loginUser} onChange={e => setLoginUser(e.target.value)} className="form-input" placeholder="admin username" />
+              <input required data-testid="input-admin-username" value={loginUser} onChange={e => setLoginUser(e.target.value)} className="form-input" placeholder="admin" />
             </Field>
             <Field label="Password">
               <input required type="password" data-testid="input-admin-password" value={loginPass} onChange={e => setLoginPass(e.target.value)} className="form-input" placeholder="••••••••" />
             </Field>
-            {loginError && <p className="rounded-lg bg-destructive/10 p-3 text-sm font-semibold text-destructive">{loginError}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button testId="button-cancel-admin-login" variant="quiet" type="button" onClick={() => { setShowLogin(false); setPendingSync(false); }}>Cancel</Button>
-              <Button testId="button-submit-admin-login" type="submit" disabled={loginBusy}>{loginBusy ? 'Logging in…' : 'Log in & sync'}</Button>
+            {loginError && <p className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm font-semibold text-destructive">{loginError}</p>}
+            <div className="flex justify-end gap-2 pt-4">
+              <Button testId="btn-submit-admin-login" type="submit" disabled={loginBusy}>{loginBusy ? 'Authenticating...' : 'Sign in to Workspace'}</Button>
             </div>
           </form>
         </Modal>
       )}
+
+      {(createModal || editUser) && (
+        <UserFormModal
+          user={editUser}
+          groups={groups}
+          onClose={() => { setCreateModal(false); setEditUser(null); }}
+          onSaved={() => { setCreateModal(false); setEditUser(null); loadData(); }}
+        />
+      )}
+
+      {importModal && (
+        <ImportModal
+          onClose={() => setImportModal(false)}
+          onImported={(res) => {
+            setNotice(`Import complete: ${res.added || 0} added as pending, ${res.updated || 0} updated, ${res.warnings || 0} warnings. Review the roster, then invite pending users.`);
+            setImportModal(false);
+            loadData();
+          }}
+        />
+      )}
+
+      {enrollUser && (
+        <EnrollmentsModal
+          user={enrollUser}
+          courses={courses}
+          onClose={() => setEnrollUser(null)}
+        />
+      )}
     </div>
   );
 }
+
 
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="block"><span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>{children}</label>; }
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) { return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 grid place-items-center bg-[hsl(var(--foreground)/.35)] p-4 backdrop-blur-sm"><div className="max-h-[90dvh] w-full max-w-lg overflow-auto rounded-xl border border-border bg-card p-6 shadow-2xl sm:p-7"><div className="mb-6 flex items-center justify-between"><h2 className="text-2xl font-bold">{title}</h2><button data-testid="button-close-modal" aria-label="Close dialog" onClick={onClose} className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><X size={18} /></button></div>{children}</div></div>; }
@@ -2603,7 +2891,7 @@ function TopicWorkspacePage() {
                 <li key={s.id} className="flex items-center group hover:bg-gray-50 transition-colors">
                   <Link
                     href={`/curriculum/courses/${courseId}/topics/${topicId}/subtopics/${s.id}`}
-                    className="flex flex-1 items-center gap-4 px-5 py-4"
+                    className="flex flex-1 items-center gap-4 px-4 py-3"
                   >
                     <span className="w-7 shrink-0 text-center text-xs font-semibold text-gray-400">{si + 1}</span>
                     <span className="flex-1 text-sm font-medium text-gray-800 group-hover:text-primary transition-colors">{s.name}</span>
@@ -3619,7 +3907,7 @@ function CourseOBEPage() {
                         </div>
 
                         <div className="rounded-xl border border-border bg-card shadow-xs">
-                          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+                          <div className="flex items-center justify-between border-b border-border px-4 py-3">
                             <div>
                               <h3 className="font-bold">Course Outcomes</h3>
                               <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{outline.outcomes.length} defined</p>
@@ -3628,7 +3916,7 @@ function CourseOBEPage() {
                           </div>
                           <div className="divide-y divide-border">
                             {outline.outcomes.map(co => (
-                              <div key={co.id} data-testid={`row-co-${co.id}`} className="flex gap-4 px-5 py-4">
+                              <div key={co.id} data-testid={`row-co-${co.id}`} className="flex gap-4 px-4 py-3">
                                 <div className="flex h-8 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-black text-primary">{co.code}</div>
                                 <div className="min-w-0 flex-1">
                                   <p className="text-sm leading-relaxed">{co.description}</p>
@@ -3654,7 +3942,7 @@ function CourseOBEPage() {
                             <button
                               data-testid={`button-toggle-module-${mod.id}`}
                               onClick={() => toggleModule(mod.id)}
-                              className="flex w-full items-center gap-4 px-5 py-4 text-left hover:bg-muted/40"
+                              className="flex w-full items-center gap-4 px-4 py-3 text-left hover:bg-muted/40"
                             >
                               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-black text-primary-foreground">{mod.order}</span>
                               <div className="min-w-0 flex-1">
@@ -3713,7 +4001,7 @@ function CourseOBEPage() {
                     {/* ── CO-PO Mapping tab ── */}
                     {activeTab === 'mapping' && (
                       <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
-                        <div className="border-b border-border px-5 py-4">
+                        <div className="border-b border-border px-4 py-3">
                           <h3 className="font-bold">CO-PO Mapping Matrix</h3>
                           <p className="mt-0.5 text-xs text-muted-foreground">Course Outcomes mapped to Programme Outcomes (NBA framework). Hover a PO header for its full title.</p>
                         </div>
@@ -4156,7 +4444,7 @@ function CurriculumTopicsPage() {
               </div>
 
               {/* Actions */}
-              <div className="flex flex-col justify-center gap-2 px-5 py-4 shrink-0">
+              <div className="flex flex-col justify-center gap-2 px-4 py-3 shrink-0">
                 <div className="flex gap-2">
                   {cardBtn('Edit',   <Pencil  size={12} />)}
                   {cardBtn('Delete', <Trash2  size={12} />)}
@@ -5091,7 +5379,7 @@ function AccessLogsPage() {
 
       {/* Table */}
       <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <span className="text-sm font-semibold text-foreground">
             {data ? `${data.total.toLocaleString()} log entries` : 'Loading…'}
           </span>
@@ -5101,7 +5389,7 @@ function AccessLogsPage() {
         </div>
 
         {error && (
-          <div className="px-5 py-4 text-sm text-destructive flex items-center gap-2">
+          <div className="px-4 py-3 text-sm text-destructive flex items-center gap-2">
             <CircleAlert size={16} /> {error}
             <button onClick={() => load(committed, page)} className="ml-2 underline">Retry</button>
           </div>

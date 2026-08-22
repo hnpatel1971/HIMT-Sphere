@@ -207,6 +207,11 @@ paths:
       operationId: listUsers
       tags: [administration]
       summary: List users
+      parameters:
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: role, schema: { $ref: "#/components/schemas/UserRole" } }
+        - { in: query, name: group, schema: { type: string } }
+        - { in: query, name: status, schema: { $ref: "#/components/schemas/UserStatus" } }
       responses:
         "200":
           description: User list
@@ -216,11 +221,34 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/User"
+        "401":
+          description: Admin login required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createUser
+      tags: [administration]
+      summary: Create a directory user and send a Clerk invitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreate"
+      responses:
+        "201":
+          description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserCreateResult"
   /users/{userId}:
     patch:
       operationId: updateUserGroup
       tags: [administration]
-      summary: Update a user's group
+      summary: Update a user's directory profile and access state
       parameters:
         - in: path
           name: userId
@@ -232,7 +260,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UserGroupUpdate"
+                $ref: "#/components/schemas/UserUpdate"
       responses:
         "200":
           description: Updated user
@@ -246,12 +274,96 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /users/invite-pending:
+    post:
+      operationId: invitePendingUsers
+      tags: [administration]
+      summary: Send Clerk invitations to all reviewed pending users
+      responses:
+        "200":
+          description: Bulk invitation outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkInvitationResult"
+  /users/{userId}/invite:
+    post:
+      operationId: inviteUser
+      tags: [administration]
+      summary: Send or resend a Clerk invitation
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Invitation outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserInvitationResult"
+  /users/{userId}/enrollments:
+    get:
+      operationId: listUserEnrollments
+      tags: [administration]
+      summary: List a user's course assignments
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Course assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserEnrollment"
+    put:
+      operationId: replaceUserEnrollments
+      tags: [administration]
+      summary: Replace a user's course assignments in bulk
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserEnrollmentUpdate"
+      responses:
+        "200":
+          description: Updated assignments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserEnrollmentResult"
         "404":
           description: User or group not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /users/imports:
+    get:
+      operationId: listUserImports
+      tags: [administration]
+      summary: List recent persistent user import audits
+      responses:
+        "200":
+          description: Recent import runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserImportAudit"
   /curriculum/programmes:
     get:
       operationId: listProgrammes
@@ -517,21 +629,109 @@ components:
         id: { type: string }
         name: { type: string }
         email: { type: string }
-        role: { type: string }
+        role: { $ref: "#/components/schemas/UserRole" }
         group: { type: string }
-        status: { type: string }
+        status: { $ref: "#/components/schemas/UserStatus" }
         lastActivity: { type: string }
       required: [id, name, email, role, group, status, lastActivity]
-    UserGroupUpdate:
+    UserRole:
+      type: string
+      enum: [Admin, Faculty, Learner]
+    UserStatus:
+      type: string
+      enum: [Active, Pending, Invited, Suspended]
+    UserCreate:
       type: object
       properties:
+        name: { type: string, minLength: 1 }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/UserRole" }
+        group: { type: string }
+      required: [name, email, role, group]
+    UserUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        role: { $ref: "#/components/schemas/UserRole" }
         group: { type: string, minLength: 1 }
-      required: [group]
+        status: { $ref: "#/components/schemas/UserStatus" }
+      minProperties: 1
+    UserCreateResult:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/UserRole" }
+        group: { type: string }
+        status: { $ref: "#/components/schemas/UserStatus" }
+        lastActivity: { type: string }
+        invitationSent: { type: boolean }
+        accountExists: { type: boolean }
+      required: [id, name, email, role, group, status, lastActivity, invitationSent, accountExists]
+    UserInvitationResult:
+      type: object
+      properties:
+        sent: { type: boolean }
+        accountExists: { type: boolean }
+      required: [sent, accountExists]
+    BulkInvitationFailure:
+      type: object
+      properties:
+        userId: { type: string }
+        error: { type: string }
+      required: [userId, error]
+    BulkInvitationResult:
+      type: object
+      properties:
+        total: { type: number }
+        sent: { type: number }
+        activated: { type: number }
+        failed: { type: number }
+        failures:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkInvitationFailure"
+      required: [total, sent, activated, failed, failures]
+    UserEnrollment:
+      type: object
+      properties:
+        courseId: { type: string }
+      required: [courseId]
+    UserEnrollmentUpdate:
+      type: object
+      properties:
+        courseIds:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+      required: [courseIds]
+    UserEnrollmentResult:
+      type: object
+      properties:
+        userId: { type: string }
+        courseIds:
+          type: array
+          items: { type: string }
+      required: [userId, courseIds]
+    UserImportRow:
+      type: object
+      properties:
+        name: { type: string }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/UserRole" }
+        group: { type: string }
+        status: { $ref: "#/components/schemas/UserStatus" }
+      required: [name, email]
     UserImportInput:
       type: object
       properties:
         filename: { type: string }
-        rows: { type: number, minimum: 1 }
+        rows:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/UserImportRow"
       required: [filename, rows]
     ImportResult:
       type: object
@@ -544,7 +744,27 @@ components:
         warnings: { type: number }
         failed: { type: number }
         progress: { type: number }
+        added: { type: number }
+        updated: { type: number }
+        messages:
+          type: array
+          items: { type: string }
       required: [id, filename, status, total, valid, warnings, failed, progress]
+    UserImportAudit:
+      type: object
+      properties:
+        id: { type: string }
+        source: { type: string }
+        filename: { type: string }
+        total: { type: number }
+        added: { type: number }
+        updated: { type: number }
+        failed: { type: number }
+        warnings:
+          type: array
+          items: { type: string }
+        createdAt: { type: string }
+      required: [id, source, filename, total, added, updated, failed, warnings, createdAt]
     Dashboard:
       type: object
       properties:

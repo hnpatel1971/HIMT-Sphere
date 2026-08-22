@@ -1,6 +1,11 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { ensureAppSettingsTable, ensureAccessLogsTable, ensureContentTokensTable } from "./routes/lms";
+import {
+  ensureAccessLogsTable,
+  ensureAppSettingsTable,
+  ensureContentTokensTable,
+  ensureUserWorkspaceTables,
+} from "./routes/lms";
 
 const rawPort = process.env["PORT"];
 
@@ -18,7 +23,12 @@ if (Number.isNaN(port) || port <= 0) {
 
 // Ensure the app_settings table exists before accepting requests so that
 // credential reads/writes never race against table creation.
-Promise.all([ensureAppSettingsTable(), ensureAccessLogsTable(), ensureContentTokensTable()])
+Promise.all([
+  ensureAppSettingsTable(),
+  ensureAccessLogsTable(),
+  ensureContentTokensTable(),
+  ensureUserWorkspaceTables(),
+])
   .catch(err => {
     logger.error({ err }, "[init] DB table initialisation failed — cannot start");
     process.exit(1);

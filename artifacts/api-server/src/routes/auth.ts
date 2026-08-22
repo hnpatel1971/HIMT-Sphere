@@ -1,5 +1,8 @@
 import { Router } from "express";
 import { timingSafeEqual } from "crypto";
+import { clerkClient, getAuth } from "@clerk/express";
+import { and, eq, ilike } from "drizzle-orm";
+import { db, learnerIdentities, users } from "@workspace/db";
 
 // Augment express-session so TypeScript knows about our custom field.
 declare module "express-session" {
@@ -10,9 +13,51 @@ declare module "express-session" {
 
 const router = Router();
 
-/** GET /api/auth/status — returns whether the current session has admin rights. */
-router.get("/auth/status", (req, res) => {
-  res.json({ isAdmin: req.session.isAdmin === true });
+async function clerkDirectoryAdmin(req: import("express").Request): Promise<boolean> {
+  const clerkUserId = getAuth(req).userId;
+  if (!clerkUserId) return false;
+
+  const [identity] = await db.select().from(learnerIdentities)
+    .where(eq(learnerIdentities.clerkUserId, clerkUserId));
+  let directoryUser = identity
+    ? (await db.select().from(users).where(eq(users.id, identity.userId)))[0]
+    : undefined;
+
+  if (!directoryUser) {
+    const clerkUser = await clerkClient.users.getUser(clerkUserId);
+    const email = clerkUser.primaryEmailAddress?.emailAddress?.trim().toLowerCase();
+    if (!email) return false;
+    directoryUser = (await db.select().from(users).where(ilike(users.email, email)))[0];
+    if (!directoryUser) return false;
+    const invitationBound = typeof clerkUser.publicMetadata === "object"
+      && clerkUser.publicMetadata !== null
+      && (clerkUser.publicMetadata as Record<string, unknown>).lmsUserId === directoryUser.id;
+    if (directoryUser.status !== "Active") {
+      if (directoryUser.status !== "Invited" || !invitationBound) return false;
+      [directoryUser] = await db.update(users)
+        .set({ status: "Active", lastActivity: "Just now" })
+        .where(and(eq(users.id, directoryUser.id), eq(users.status, "Invited")))
+        .returning();
+    }
+    await db.insert(learnerIdentities).values({
+      clerkUserId,
+      userId: directoryUser.id,
+      email,
+      updatedAt: new Date(),
+    }).onConflictDoNothing();
+  }
+
+  return directoryUser.role === "admin" && directoryUser.status === "Active";
+}
+
+/** GET /api/auth/status — directory Admin role or deliberate break-glass session. */
+router.get("/auth/status", async (req, res) => {
+  if (req.session.isAdmin === true) { res.json({ isAdmin: true }); return; }
+  try {
+    res.json({ isAdmin: await clerkDirectoryAdmin(req) });
+  } catch {
+    res.json({ isAdmin: false });
+  }
 });
 
 /**
