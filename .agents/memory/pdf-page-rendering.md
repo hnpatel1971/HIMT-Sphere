@@ -36,7 +36,9 @@ managed provider with its own short-lived authorization handoff.
 
 ---
 
-**LibreOffice and Poppler declared as Nix system dependencies — never hard-code store paths.**
-`soffice`, `pdftoppm`, and `pdfinfo` are all invoked by binary name (from PATH). LibreOffice is installed via `installSystemDependencies({ packages: ["libreoffice"] })`.
+**LibreOffice and Poppler must be declared as Nix system dependencies — never hard-code store paths.**
+`soffice`, `pdftoppm`, and `pdfinfo` are all invoked by binary name (from PATH). Install both packages with `installSystemDependencies({ packages: ["libreoffice", "poppler"] })`.
 
-**Why:** Nix store paths contain content-addressed hashes that change on every rebuild or NixOS channel update. Hard-coding a store path causes all non-PDF rendering to fail silently after any environment update.
+**Why:** Local development can have Poppler available even when the production image does not. Without the declared runtime package, a valid stored PDF is misclassified as unpreviewable when the renderer cannot run `pdfinfo`. Nix store paths also contain content-addressed hashes that change on every rebuild or NixOS channel update.
+
+**How to apply:** Keep both packages declared in `.replit`, invoke their binaries by PATH name, and verify the actual stored document's page count and a watermarked PNG render before treating a conversion issue as a source-format problem.
