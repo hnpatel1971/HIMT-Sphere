@@ -957,7 +957,21 @@ router.delete("/curriculum/list/:id", async (req, res) => {
 
 // Groups
 router.get("/curriculum/groups", async (_req, res) => {
-  try { res.json(await db.select().from(groupsTable)); }
+  try {
+    const rows = await db
+      .select({
+        id: groupsTable.id,
+        name: groupsTable.name,
+        parentId: groupsTable.parentId,
+        createdAt: groupsTable.createdAt,
+        learnerCount: sql<number>`count(*) FILTER (WHERE ${usersTable.role} = 'student')::int`,
+      })
+      .from(groupsTable)
+      .leftJoin(usersTable, eq(usersTable.groupName, groupsTable.name))
+      .groupBy(groupsTable.id, groupsTable.name, groupsTable.parentId, groupsTable.createdAt)
+      .orderBy(groupsTable.name);
+    res.json(rows);
+  }
   catch (err) { res.status(500).json({ error: String(err) }); }
 });
 

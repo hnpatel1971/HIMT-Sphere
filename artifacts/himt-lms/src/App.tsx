@@ -3784,12 +3784,12 @@ function AddCOModal({ courseId, existingCount, onClose, onSaved, addOutcome }: {
 }
 
 // ─── CurriculumGroupsPage ─────────────────────────────────────────────────────
-type GroupNode = { id: string; name: string; children?: GroupNode[] };
-type GroupRow  = { id: string; name: string; parentId: string | null };
+type GroupNode = { id: string; name: string; learnerCount: number; children?: GroupNode[] };
+type GroupRow  = { id: string; name: string; parentId: string | null; learnerCount: number };
 
 function buildGroupTree(rows: GroupRow[]): GroupNode[] {
   const lookup: Record<string, GroupNode> = {};
-  rows.forEach(r => { lookup[r.id] = { id: r.id, name: r.name, children: [] }; });
+  rows.forEach(r => { lookup[r.id] = { id: r.id, name: r.name, learnerCount: r.learnerCount ?? 0, children: [] }; });
   const roots: GroupNode[] = [];
   rows.forEach(r => {
     const node = lookup[r.id];
@@ -3835,7 +3835,13 @@ function GroupTreeItem({ node, depth, selected, onSelect, expanded, onToggle }: 
         )}>
           {selected === node.id && <span className="h-2 w-2 rounded-full bg-primary" />}
         </span>
-        <span className="text-sm text-gray-700">{node.name}</span>
+        <span className="min-w-0 flex-1 truncate text-sm text-gray-700">{node.name}</span>
+        <span
+          data-testid={`text-group-learner-count-${node.id}`}
+          className="mr-3 shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500"
+        >
+          {node.learnerCount} {node.learnerCount === 1 ? 'learner' : 'learners'}
+        </span>
       </div>
       {hasChildren && isExpanded && (
         <div>
