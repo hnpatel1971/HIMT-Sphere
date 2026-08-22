@@ -53,6 +53,7 @@ async function fetchWithContentToken(
     const r = await fetch(url, {
       ...opts,
       credentials: 'include',
+      cache: 'no-store',
       headers: { ...(opts?.headers as Record<string, string> ?? {}), Authorization: `Bearer ${token}` },
     });
     if (r.ok || r.status !== 403 || attempt === 1) return r;
@@ -385,7 +386,7 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
         ? 'Sign in with your administrator account or enrolled learner account to open this protected document.'
         : accessError.status === 403
           ? 'Your current account does not have access to this course material. Contact an administrator if you need enrollment.'
-          : 'The protected document session could not be established. Please try again.';
+          : 'The protected document renderer could not prepare this file. Please try again; if it continues, the issue has been recorded for the administrator.';
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-gray-400">
           <LockKeyhole size={28} className="text-amber-400" />

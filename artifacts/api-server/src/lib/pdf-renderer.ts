@@ -36,6 +36,7 @@ import { pipeline } from "stream/promises";
 import { randomUUID } from "crypto";
 import type { Readable } from "stream";
 import sharp from "sharp";
+import { logger } from "./logger";
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -254,7 +255,9 @@ export async function renderProtectedPage(opts: RenderPageOpts): Promise<Buffer>
 
 /**
  * Full pipeline: stream → temp file → [LibreOffice PDF conversion if needed] → page count.
- * Returns null if the document cannot be converted to PDF or rendered.
+ * Throws if the document cannot be converted to PDF or rendered. Callers must
+ * surface this as a renderer failure, not a claim that a valid document has an
+ * unsupported format.
  */
 export async function getPageCountFromStream(
   pdfStream: Readable,
@@ -266,8 +269,9 @@ export async function getPageCountFromStream(
     await streamToFile(pdfStream, inputPath);
     const pdfPath = await ensurePdf(inputPath, dir);
     return await getPageCountFromFile(pdfPath);
-  } catch {
-    return null; // Unsupported format or conversion failed
+  } catch (error) {
+    logger.error({ error, mimeType }, "Protected document page-count rendering failed");
+    throw error;
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }

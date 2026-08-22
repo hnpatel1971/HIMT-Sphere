@@ -42,3 +42,12 @@ managed provider with its own short-lived authorization handoff.
 **Why:** Local development can have Poppler available even when the production image does not. Without the declared runtime package, a valid stored PDF is misclassified as unpreviewable when the renderer cannot run `pdfinfo`. Nix store paths also contain content-addressed hashes that change on every rebuild or NixOS channel update.
 
 **How to apply:** Keep both packages declared in `.replit`, invoke their binaries by PATH name, and verify the actual stored document's page count and a watermarked PNG render before treating a conversion issue as a source-format problem.
+
+---
+
+**Protected document page-count responses must never be cached, and renderer failures must remain observable.**
+The page-count endpoint sets protected no-store headers and its browser request uses `cache: "no-store"`. A page-count failure is a server error with renderer logging, not an `isPdf: false` format classification.
+
+**Why:** Express ETags can turn an old failed page-count result into a `304 Not Modified`, leaving a valid document stuck on the misleading unsupported-format screen after a deployment or renderer repair.
+
+**How to apply:** Preserve no-store headers on every protected JSON response that determines document availability. If page rendering fails, log the tool/conversion error and return a generic protected-renderer failure without exposing source bytes or internal details to the browser.

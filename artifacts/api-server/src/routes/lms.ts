@@ -4679,6 +4679,9 @@ async function findProtectedDocumentResource(resourceId: string) {
 // ── Admin: page-count ─────────────────────────────────────────────────────────
 
 router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req, res) => {
+  // Page-count results are tied to one-time tokens and the currently deployed
+  // renderer. Never let a browser reuse an old “unsupported” response.
+  setProtectedContentHeaders(res, "application/json; charset=utf-8");
   const fetchMode = req.headers["sec-fetch-mode"];
   if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
     res.status(403).json({ error: "This resource can only be viewed inside the application." }); return;
@@ -4821,6 +4824,9 @@ router.get("/curriculum/resources/:resourceId/open/accessible", async (req, res)
 });
 
 router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res) => {
+  // Page-count results are tied to one-time tokens and the currently deployed
+  // renderer. Never let a browser reuse an old “unsupported” response.
+  setProtectedContentHeaders(res, "application/json; charset=utf-8");
   const fetchMode = req.headers["sec-fetch-mode"];
   if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
     res.status(403).json({ error: "This resource can only be viewed inside the application." }); return;
