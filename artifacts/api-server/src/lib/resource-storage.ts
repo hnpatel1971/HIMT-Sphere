@@ -82,6 +82,20 @@ export async function getStoredResource(objectPath: string): Promise<File> {
   return file;
 }
 
+/**
+ * Gives a delivery provider a brief, server-generated read URL for a private
+ * object. This is never returned to a browser or stored in the database.
+ */
+export async function getStoredResourceReadUrl(objectPath: string, expiresInMs = 60 * 60 * 1000): Promise<string> {
+  const file = await getStoredResource(objectPath);
+  const [url] = await file.getSignedUrl({
+    version: "v4",
+    action: "read",
+    expires: Date.now() + expiresInMs,
+  });
+  return url;
+}
+
 export async function deleteStoredResource(objectPath: string): Promise<void> {
   const file = gcsFileForObjectPath(objectPath);
   await file.delete({ ignoreNotFound: true });

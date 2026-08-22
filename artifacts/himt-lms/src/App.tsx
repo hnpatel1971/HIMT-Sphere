@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import Hls from 'hls.js';
+import MuxPlayer, { type MuxPlayerRefAttributes } from '@mux/mux-player-react';
 
 // ─── Shared API helpers ───────────────────────────────────────────────────────
 const API = '/api';
@@ -445,13 +445,23 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
   const MEDIA_TYPES = new Set(['Video', 'Recording']);
   const isVideo = MEDIA_TYPES.has(resource.type ?? '');
   const isStoredDoc = !isVideo;
-  type PlaybackSession = { manifestUrl: string; expiresAt: string; positionSeconds: number; captions?: { url: string } | null; transcript?: string | null };
+  type PlaybackSession = {
+    playbackId: string;
+    playbackToken: string;
+    drmToken: string;
+    viewerSessionId: string;
+    expiresAt: string;
+    positionSeconds: number;
+    captions?: { url: string } | null;
+    transcript?: string | null;
+  };
   const [playback, setPlayback] = useState<PlaybackSession | null>(null);
   const [fetchState, setFetchState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [fetchErr,   setFetchErr]   = useState('');
   const [playbackRate, setPlaybackRate] = useState('1');
   const [showTranscript, setShowTranscript] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [playbackRefresh, setPlaybackRefresh] = useState(0);
+  const muxPlayerRef = useRef<MuxPlayerRefAttributes | null>(null);
   const lastProgressAt = useRef(0);
 
   useEffect(() => {
@@ -465,7 +475,10 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       method: 'POST', credentials: 'include', headers: { Authorization: `Bearer ${token}` },
     }))
       .then(async r => {
-        if (!r.ok) throw new Error(`Server returned ${r.status}`);
+        if (!r.ok) {
+          const failure = await r.json().catch(() => null) as { error?: string } | null;
+          throw new Error(failure?.error || `Protected playback request failed (${r.status})`);
+        }
         const session = await r.json() as PlaybackSession;
         if (cancelled) return;
         setPlayback(session);
@@ -475,11 +488,19 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
         if (!cancelled) { setFetchErr(String(e)); setFetchState('error'); }
       });
     return () => { cancelled = true; };
-  }, [resource.openUrl, resource.id, isVideo]);
+  }, [resource.openUrl, resource.id, isVideo, playbackRefresh]);
 
-  const reportProgress = (final = false) => {
-    const video = videoRef.current;
-    if (!video || !playback) return;
+  // Mux tokens are deliberately very short-lived. Renew before expiry so every
+  // minute of protected playback rechecks the learner's current enrollment.
+  useEffect(() => {
+    if (!playback) return;
+    const refreshIn = new Date(playback.expiresAt).getTime() - Date.now() - 12_000;
+    const timer = window.setTimeout(() => setPlaybackRefresh(value => value + 1), Math.max(1_000, refreshIn));
+    return () => window.clearTimeout(timer);
+  }, [playback?.expiresAt]);
+
+  const reportProgress = (media: HTMLMediaElement, final = false) => {
+    if (!playback) return;
     const now = Date.now();
     if (!final && now - lastProgressAt.current < 5000) return;
     lastProgressAt.current = now;
@@ -487,42 +508,17 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       method: 'PATCH', credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session: new URL(playback.manifestUrl, window.location.origin).searchParams.get('session'),
-        positionSeconds: video.currentTime,
-        durationSeconds: video.duration,
-        playbackRate: video.playbackRate,
-        captionsEnabled: false,
+        session: playback.viewerSessionId,
+        positionSeconds: media.currentTime,
+        durationSeconds: media.duration,
+        playbackRate: media.playbackRate,
+        captionsEnabled: Boolean(playback.captions),
       }),
     }).catch(() => undefined);
   };
 
-  // Safari plays HLS natively; hls.js supplies the same authenticated manifest,
-  // encrypted key, and segment flow for Chromium/Firefox browsers.
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !playback) return;
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playback.manifestUrl;
-      void video.play().catch(() => undefined);
-      return;
-    }
-    if (!Hls.isSupported()) {
-      setFetchErr('This browser cannot play protected adaptive video. Please use a current supported browser.');
-      setFetchState('error');
-      return;
-    }
-    const hls = new Hls({ xhrSetup: xhr => { xhr.withCredentials = true; } });
-    hls.loadSource(playback.manifestUrl);
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => { void video.play().catch(() => undefined); });
-    hls.on(Hls.Events.ERROR, (_event, data) => {
-      if (data.fatal) {
-        setFetchErr('Protected playback session ended. Close and reopen the video to start a new session.');
-        setFetchState('error');
-      }
-    });
-    return () => hls.destroy();
-  }, [playback]);
+  const mediaFromEvent = (event: Event): HTMLMediaElement | null =>
+    event.currentTarget as unknown as HTMLMediaElement | null;
 
   // ── DRM: block print / save shortcuts and blank the page on @media print ──
   useEffect(() => {
@@ -575,25 +571,42 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
     );
   } else if (playback) {
     viewer = (
-      <div className="flex h-full flex-col bg-black">
-        <video
-          ref={videoRef}
-          controls
+      <div className="flex h-full flex-col bg-black" onContextMenu={e => e.preventDefault()}>
+        <MuxPlayer
+          ref={muxPlayerRef}
+          playbackId={playback.playbackId}
+          tokens={{ playback: playback.playbackToken, drm: playback.drmToken }}
           autoPlay
-          controlsList="nodownload nofullscreen"
           disablePictureInPicture
-          onContextMenu={e => e.preventDefault()}
-          onLoadedMetadata={e => { e.currentTarget.currentTime = playback.positionSeconds; }}
-          onTimeUpdate={() => reportProgress()}
-          onEnded={() => reportProgress(true)}
-          onRateChange={e => setPlaybackRate(String(e.currentTarget.playbackRate))}
+          onLoadedMetadata={e => {
+            const media = mediaFromEvent(e);
+            if (media) media.currentTime = playback.positionSeconds;
+          }}
+          onTimeUpdate={e => {
+            const media = mediaFromEvent(e);
+            if (media) reportProgress(media);
+          }}
+          onEnded={e => {
+            const media = mediaFromEvent(e);
+            if (media) reportProgress(media, true);
+          }}
+          onRateChange={e => {
+            const media = mediaFromEvent(e);
+            if (media) setPlaybackRate(String(media.playbackRate));
+          }}
+          onError={() => {
+            setFetchErr('Protected playback could not start on this device. Use a current browser with Widevine, FairPlay, or PlayReady support.');
+            setFetchState('error');
+          }}
+          metadata={{ video_id: resource.id, video_title: resource.title }}
+          playbackRates={[0.5, 0.75, 1, 1.25, 1.5, 2]}
           className="min-h-0 flex-1 w-full bg-black"
-        >{playback.captions?.url && <track kind="captions" src={playback.captions.url} srcLang="en" label="English" default />}</video>
+        >{playback.captions?.url && <track kind="captions" src={playback.captions.url} srcLang="en" label="English" default />}</MuxPlayer>
         <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-300">
           <label htmlFor="protected-speed">Playback speed</label>
           <select id="protected-speed" value={playbackRate} onChange={e => {
             setPlaybackRate(e.target.value);
-            if (videoRef.current) videoRef.current.playbackRate = Number(e.target.value);
+            if (muxPlayerRef.current) muxPlayerRef.current.playbackRate = Number(e.target.value);
           }} className="rounded border border-gray-600 bg-gray-800 px-2 py-1 text-white">
             <option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option>
           </select>

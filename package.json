@@ -10,6 +10,7 @@
   },
   "private": true,
   "dependencies": {
+    "@mux/mux-player-react": "^3.13.2",
     "@replit/connectors-sdk": "^0.4.1",
     "hls.js": "^1.7.1"
   },

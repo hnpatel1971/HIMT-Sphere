@@ -376,6 +376,10 @@ export const courseResources = pgTable("course_resources", {
   transcript:      text("transcript"),                 // approved accessible transcript
   drmProvider:     text("drm_provider"),               // e.g. mux | buyDRM; no credentials are stored here
   drmAssetId:      text("drm_asset_id"),
+  drmPlaybackId:   text("drm_playback_id"),            // Mux DRM playback ID; never a source-file URL
+  drmStatus:       text("drm_status").default("unprovisioned"),
+  drmError:        text("drm_error"),                  // safe provisioning status; provider credentials are never stored
+  drmUpdatedAt:    timestamp("drm_updated_at"),
   error:           text("error"),
   createdAt:       timestamp("created_at").defaultNow().notNull(),
   updatedAt:       timestamp("updated_at").defaultNow().notNull(),

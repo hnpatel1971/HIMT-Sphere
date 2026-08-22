@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import "express-session"; // ensure SessionData augmentation from auth.ts is loaded
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scryptSync } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from "crypto";
 import { spawn } from "child_process";
 import { createServer } from "http";
 import { Readable } from "stream";
@@ -25,17 +25,21 @@ import {
 import {
   deleteStoredResource,
   getStoredResource,
+  getStoredResourceReadUrl,
   resourceObjectPath,
   storeResourceStream,
 } from "../lib/resource-storage";
 import { inspectStoredResource, resumeStoredResourceImport } from "../lib/resource-recovery";
 import { renderProtectedPage, getAccessibleTextFromStream, getPageCountFromStream } from "../lib/pdf-renderer";
 import {
-  prepareProtectedHls,
-  readProtectedHlsFile,
-  removeProtectedHls,
-  type ProtectedHlsPackage,
-} from "../lib/protected-video";
+  createMuxDrmAsset,
+  createMuxPlaybackTokens,
+  findMuxAssetByExternalId,
+  getMuxAsset,
+  isMuxDrmConfigured,
+  MuxConfigurationError,
+  MuxProviderError,
+} from "../lib/mux-video";
 import {
   courses as coursesTable,
   assignments as assignmentsTable,
@@ -629,7 +633,11 @@ export async function ensureAccessLogsTable() {
       ADD COLUMN IF NOT EXISTS captions_url TEXT,
       ADD COLUMN IF NOT EXISTS transcript TEXT,
       ADD COLUMN IF NOT EXISTS drm_provider TEXT,
-      ADD COLUMN IF NOT EXISTS drm_asset_id TEXT
+      ADD COLUMN IF NOT EXISTS drm_asset_id TEXT,
+      ADD COLUMN IF NOT EXISTS drm_playback_id TEXT,
+      ADD COLUMN IF NOT EXISTS drm_status TEXT NOT NULL DEFAULT 'unprovisioned',
+      ADD COLUMN IF NOT EXISTS drm_error TEXT,
+      ADD COLUMN IF NOT EXISTS drm_updated_at TIMESTAMPTZ
   `);
 }
 
@@ -707,7 +715,9 @@ function decryptSetting(stored: string): string {
 }
 
 // Fire-and-forget seed on startup (non-critical; logged on failure)
-seedDatabase().catch(err => console.error("[seed] Failed:", err));
+seedDatabase()
+  .then(() => provisionExistingMuxVideos())
+  .catch(err => console.error("[seed] Failed:", err));
 syncTriByteCourses().catch(err => console.error("[sync] Failed:", err));
 // NOTE: ensureAppSettingsTable() is awaited in index.ts before the HTTP server starts
 
@@ -3405,6 +3415,7 @@ async function migrateTriByteResource(
         error: null,
         updatedAt: new Date(),
       }).where(eq(courseResourcesTable.id, id));
+      scheduleMuxProvision(id);
     },
   });
   if (storedResourceResumed) {
@@ -3427,6 +3438,7 @@ async function migrateTriByteResource(
         error: null,
         updatedAt: new Date(),
       }).where(eq(courseResourcesTable.id, id));
+      scheduleMuxProvision(id);
       return "imported";
     }
   }
@@ -3458,6 +3470,7 @@ async function migrateTriByteResource(
         error: null,
         updatedAt: new Date(),
       }).where(eq(courseResourcesTable.id, id));
+      scheduleMuxProvision(id);
       return "imported";
     }
   } catch (error) {
@@ -3487,6 +3500,7 @@ async function migrateTriByteResource(
           error: null,
           updatedAt: new Date(),
         }).where(eq(courseResourcesTable.id, id));
+        scheduleMuxProvision(id);
         return "imported";
       }
       if (isDefinitiveTriByteUnavailable(directError) || resource.sourceUrl === resource.previewUrl) {
@@ -3998,38 +4012,155 @@ router.post("/curriculum/resources/:resourceId/token", async (req, res) => {
   res.json({ token, expiresAt: expiresAt.toISOString() });
 });
 
-// ─── Protected adaptive video playback ────────────────────────────────────────
+// ─── Mux multi-DRM video playback ─────────────────────────────────────────────
 
-const hlsPackages = new Map<string, ProtectedHlsPackage>();
+type MuxProvisionedAsset = {
+  assetId: string;
+  playbackId: string | null;
+  status: string;
+  error: string | null;
+};
 
-async function cleanExpiredHlsPackages(): Promise<void> {
-  const expired = [...hlsPackages.entries()].filter(([, item]) => item.expiresAt <= new Date());
-  await Promise.all(expired.map(async ([id, item]) => {
-    hlsPackages.delete(id);
-    await removeProtectedHls(item);
-  }));
+const muxProvisioning = new Map<string, Promise<MuxProvisionedAsset>>();
+
+async function provisionMuxAsset(resource: typeof courseResourcesTable.$inferSelect): Promise<MuxProvisionedAsset> {
+  if (!isMuxDrmConfigured()) {
+    await db.update(courseResourcesTable).set({
+      drmStatus: "configuration_required",
+      drmError: "Mux DRM configuration is not available",
+      drmUpdatedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(courseResourcesTable.id, resource.id));
+    throw new MuxConfigurationError();
+  }
+  if (!resource.storagePath) {
+    await db.update(courseResourcesTable).set({
+      drmStatus: "unsupported",
+      drmError: "Only privately stored HIMT recordings can be provisioned to Mux DRM",
+      drmUpdatedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(courseResourcesTable.id, resource.id));
+    throw new MuxProviderError("This video must be migrated to private HIMT storage before it can use protected playback");
+  }
+
+  try {
+    return await db.transaction(async (tx) => {
+      // This session lock serializes reconciliation, remote creation, and
+      // persistence across every API instance. Unlike a timestamp lease, it
+      // cannot expire while a slow worker is still active; PostgreSQL releases
+      // it immediately if that worker or its connection dies.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${resource.id}, 0))`);
+      const [current] = await tx.select().from(courseResourcesTable)
+        .where(eq(courseResourcesTable.id, resource.id));
+      if (!current) throw new MuxProviderError("Learning resource is no longer available");
+      if (!current.storagePath) throw new MuxProviderError("This video must be migrated to private HIMT storage before it can use protected playback");
+
+      const persist = async (asset: MuxProvisionedAsset) => {
+        await tx.update(courseResourcesTable).set({
+          drmProvider: "mux",
+          drmAssetId: asset.assetId,
+          drmPlaybackId: asset.playbackId,
+          drmStatus: asset.status,
+          drmError: asset.error,
+          drmUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(courseResourcesTable.id, resource.id));
+      };
+
+      if (current.drmProvider === "mux" && current.drmAssetId) {
+        const asset = await getMuxAsset(current.drmAssetId);
+        await persist(asset);
+        return asset;
+      }
+
+      await tx.update(courseResourcesTable).set({
+        drmProvider: "mux",
+        drmStatus: "provisioning",
+        drmError: null,
+        drmUpdatedAt: new Date(),
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, resource.id));
+
+      // A prior process may have completed the remote create but died before it
+      // could save the returned ID. Reuse the asset tagged with this immutable
+      // LMS resource ID before attempting another provider-side creation.
+      const reconciledAsset = await findMuxAssetByExternalId(resource.id);
+      if (reconciledAsset) {
+        await persist(reconciledAsset);
+        return reconciledAsset;
+      }
+
+      // The signed storage URL is an ingestion credential only. It lives long
+      // enough for a large source import but never leaves this server process.
+      const asset = await createMuxDrmAsset(
+        await getStoredResourceReadUrl(current.storagePath, 24 * 60 * 60 * 1000),
+        current.title,
+        resource.id,
+      );
+      await persist(asset);
+      return asset;
+    });
+  } catch (error) {
+    if (!(error instanceof MuxConfigurationError)) {
+      await db.update(courseResourcesTable).set({
+        drmStatus: "failed",
+        drmError: error instanceof MuxProviderError ? "Mux rejected or could not ingest this source" : "Mux provisioning could not be completed",
+        drmUpdatedAt: new Date(),
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, resource.id));
+    }
+    throw error;
+  }
 }
 
-async function ensureHlsPackage(
-  resource: typeof courseResourcesTable.$inferSelect,
-  viewerSession: typeof protectedViewerSessionsTable.$inferSelect,
-): Promise<ProtectedHlsPackage> {
-  await cleanExpiredHlsPackages();
-  const existing = hlsPackages.get(viewerSession.id);
-  if (existing && existing.expiresAt > new Date()) return existing;
-  if (existing) await removeProtectedHls(existing);
-  if (!resource.storagePath) throw new Error("Protected source video is unavailable");
-  const storedFile = await getStoredResource(resource.storagePath);
-  const keyUri = `/api/curriculum/resources/${resource.id}/playback/key?session=${encodeURIComponent(viewerSession.id)}`;
-  // Rebuilding after a restart or on another instance must yield the exact same
-  // AES key. The key is never persisted or sent except via its authorized route.
-  const encryptionKey = createHmac("sha256", process.env.SESSION_SECRET ?? "missing-session-secret")
-    .update(`himt-hls:${viewerSession.id}:${resource.id}`)
-    .digest()
-    .subarray(0, 16);
-  const packageInfo = await prepareProtectedHls(storedFile, keyUri, viewerSession.expiresAt, encryptionKey);
-  hlsPackages.set(viewerSession.id, packageInfo);
-  return packageInfo;
+async function ensureMuxAsset(resource: typeof courseResourcesTable.$inferSelect): Promise<MuxProvisionedAsset> {
+  const active = muxProvisioning.get(resource.id);
+  if (active) return active;
+  const task = provisionMuxAsset(resource);
+  muxProvisioning.set(resource.id, task);
+  try {
+    return await task;
+  } finally {
+    muxProvisioning.delete(resource.id);
+  }
+}
+
+/**
+ * Existing recordings are migrated lazily when played and asynchronously after
+ * an import. The latter keeps resource imports resilient when Mux is briefly
+ * unavailable; neither path ever falls back to serving the source file.
+ */
+async function queueMuxProvision(resourceId: string): Promise<void> {
+  const [resource] = await db.select().from(courseResourcesTable).where(eq(courseResourcesTable.id, resourceId));
+  if (!resource || resource.status !== "ready" || !["Video", "Recording"].includes(resource.resourceType) || !resource.storagePath) return;
+  await ensureMuxAsset(resource);
+}
+
+function scheduleMuxProvision(resourceId: string): void {
+  void queueMuxProvision(resourceId).catch((error) => {
+    logger.warn({ error, resourceId }, "Mux provisioning will be retried before protected playback");
+  });
+}
+
+async function provisionExistingMuxVideos(): Promise<void> {
+  if (!isMuxDrmConfigured()) {
+    logger.warn("Mux DRM secrets are not configured; protected videos will remain unavailable until configured");
+    return;
+  }
+  const resources = (await db.select().from(courseResourcesTable)
+    .where(eq(courseResourcesTable.status, "ready")))
+    .filter((resource) => Boolean(resource.storagePath) && ["Video", "Recording"].includes(resource.resourceType));
+
+  // Avoid flooding either Mux or the storage signer during a deployment restart.
+  for (let index = 0; index < resources.length; index += 2) {
+    await Promise.all(resources.slice(index, index + 2).map(async (resource) => {
+      try {
+        await ensureMuxAsset(resource);
+      } catch (error) {
+        logger.warn({ error, resourceId: resource.id }, "Existing video could not be provisioned to Mux");
+      }
+    }));
+  }
 }
 
 function setProtectedContentHeaders(res: import("express").Response, contentType: string): void {
@@ -4101,74 +4232,65 @@ router.post("/curriculum/resources/:resourceId/playback-session", async (req, re
     return;
   }
   try {
-    await ensureHlsPackage(resource, viewerSession);
+    const muxAsset = await ensureMuxAsset(resource);
+    if (muxAsset.status === "errored" || muxAsset.status === "failed") {
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_error", outcomeDetail: "mux_asset_failed" });
+      res.status(422).json({
+        error: "This protected video could not be prepared. Please contact your administrator.",
+        code: "MUX_ASSET_FAILED",
+      });
+      return;
+    }
+    if (muxAsset.status !== "ready" || !muxAsset.playbackId) {
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_attempt", outcomeDetail: "mux_asset_preparing" });
+      res.status(425).json({
+        error: "This protected video is being prepared. Please try again in a moment.",
+        code: "MUX_ASSET_PREPARING",
+      });
+      return;
+    }
+    // Mux cannot call back into HIMT for every segment request, so keep each
+    // provider authorization very short and require the player to renew it.
+    // Renewal repeats the enrollment and revocation check before Mux receives
+    // another valid playback or license token.
+    const expiresAt = new Date(Math.min(viewerSession.expiresAt.getTime(), Date.now() + 75_000));
+    const tokens = createMuxPlaybackTokens(muxAsset.playbackId, expiresAt);
     const clerkUserId = getAuth(req).userId;
     const [progress] = clerkUserId
       ? await db.select().from(protectedPlaybackProgressTable)
         .where(and(eq(protectedPlaybackProgressTable.userId, clerkUserId), eq(protectedPlaybackProgressTable.resourceId, resourceId)))
       : [];
-    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "adaptive_playback_session" });
+    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "mux_drm_playback_session" });
     res.json({
-      manifestUrl: `/api/curriculum/resources/${resourceId}/playback/manifest?session=${encodeURIComponent(viewerSession.id)}`,
-      expiresAt: viewerSession.expiresAt.toISOString(),
+      playbackId: muxAsset.playbackId,
+      playbackToken: tokens.playback,
+      drmToken: tokens.drm,
+      viewerSessionId: viewerSession.id,
+      expiresAt: expiresAt.toISOString(),
       positionSeconds: progress?.positionSeconds ?? 0,
       captions: resource.captionsUrl
         ? { url: `/api/curriculum/resources/${resourceId}/playback/captions?session=${encodeURIComponent(viewerSession.id)}` }
         : null,
       transcript: resource.transcript ?? null,
-      provider: "himt-encrypted-hls",
-      drmProviderRequiredForMultiDrm: true,
+      provider: "mux",
+      drm: ["widevine", "fairplay", "playready"],
     });
   } catch (error) {
-    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_error", outcomeDetail: "adaptive_packaging_failed" });
-    logger.error({ error }, "Could not prepare protected adaptive playback");
-    res.status(422).json({ error: "Could not prepare protected adaptive playback" });
-  }
-});
-
-router.get("/curriculum/resources/:resourceId/playback/manifest", async (req, res) => {
-  const resourceId = String(req.params.resourceId);
-  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
-  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
-  try {
-    const packageInfo = await ensureHlsPackage(authorization.resource, authorization.session);
-    const manifest = (await readProtectedHlsFile(packageInfo, "manifest.m3u8")).toString("utf8");
-    const session = encodeURIComponent(authorization.session.id);
-    const protectedManifest = manifest.split("\n").map(line => (
-      line && !line.startsWith("#")
-        ? `/api/curriculum/resources/${resourceId}/playback/segment/${encodeURIComponent(line.split("/").pop() ?? "")}?session=${session}`
-        : line
-    )).join("\n");
-    setProtectedContentHeaders(res, "application/vnd.apple.mpegurl");
-    res.send(protectedManifest);
-  } catch {
-    res.status(410).json({ error: "Playback session has ended" });
-  }
-});
-
-router.get("/curriculum/resources/:resourceId/playback/segment/:segment", async (req, res) => {
-  const resourceId = String(req.params.resourceId);
-  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
-  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
-  try {
-    const packageInfo = await ensureHlsPackage(authorization.resource, authorization.session);
-    setProtectedContentHeaders(res, "video/mp2t");
-    res.end(await readProtectedHlsFile(packageInfo, String(req.params.segment)));
-  } catch {
-    res.status(404).json({ error: "Playback segment is unavailable" });
-  }
-});
-
-router.get("/curriculum/resources/:resourceId/playback/key", async (req, res) => {
-  const resourceId = String(req.params.resourceId);
-  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
-  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
-  try {
-    const packageInfo = await ensureHlsPackage(authorization.resource, authorization.session);
-    setProtectedContentHeaders(res, "application/octet-stream");
-    res.end(await readProtectedHlsFile(packageInfo, "content.key"));
-  } catch {
-    res.status(404).json({ error: "Playback key is unavailable" });
+    const configurationError = error instanceof MuxConfigurationError;
+    await logContentAccess({
+      req,
+      resourceId,
+      courseId: resource.courseId,
+      action: "view_error",
+      outcomeDetail: configurationError ? "mux_configuration_required" : "mux_provisioning_failed",
+    });
+    logger.error({ error }, "Could not prepare Mux DRM playback");
+    res.status(configurationError ? 503 : 422).json({
+      error: configurationError
+        ? "Protected video is temporarily unavailable while DRM is being configured."
+        : "This video could not be prepared for protected playback.",
+      code: configurationError ? "MUX_CONFIGURATION_REQUIRED" : "MUX_PROVISIONING_FAILED",
+    });
   }
 });
 

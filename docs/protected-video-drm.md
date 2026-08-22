@@ -2,35 +2,43 @@
 
 ## Current browser delivery
 
-HIMT stored recordings are never returned as an original MP4 download. The LMS
-creates a short-lived viewer session bound to the signed-in Clerk user and
-session, packages the private source into encrypted adaptive HLS segments, and
-rechecks course access for every manifest, key, and segment request. Playback
-position is saved during viewing; completion is recorded only after at least
-90% of the duration has been reached.
+HIMT stored recordings are never returned as an original MP4 download. Eligible
+private recordings are ingested into Mux as DRM assets, and the LMS creates a
+short-lived Mux playback and DRM authorization bound to the signed-in Clerk
+user, browser session, and current enrollment. The browser receives a Mux
+playback ID plus brief authorization tokens, never the private-object URL or a
+permanent source-file URL.
 
-The encryption key and all segment URLs are transient protected requests. They
-use no-store caching, a restrictive content security policy, and no-referrer
-headers. The application intentionally blocks external YouTube/Vimeo entries
-from being represented as protected HIMT playback until they are migrated to an
-approved delivery provider. Those sources are outside the DRM scope.
+The Mux Player uses adaptive delivery and Mux's managed Widevine, FairPlay, and
+PlayReady license flows on supported browsers. The LMS renews authorization
+before it expires, so each renewal repeats its revocation and enrollment check.
+Playback position is saved during viewing; completion is recorded only after at
+least 90% of the duration has been reached.
+
+External YouTube/Vimeo entries are deliberately unavailable through this player
+until HIMT migrates a recording it controls into private storage. They are
+outside the DRM scope.
 
 ## Managed multi-DRM handoff
 
-Commercial Widevine, FairPlay, and PlayReady delivery must be supplied by an
-approved managed provider. The resource model has `drm_provider` and
-`drm_asset_id` metadata so a provider-backed asset can replace the encrypted
-HLS package without changing learner authorization, audit, progress, or
-completion semantics.
+Commercial Widevine, FairPlay, and PlayReady delivery is supplied by Mux. The
+resource model records the provider asset, DRM playback ID, provisioning state,
+and safe failure detail without recording credentials or private source URLs.
+Each asset carries the immutable LMS resource ID as Mux metadata so interrupted
+provisioning retries reconcile an existing asset instead of creating a duplicate.
+Provisioning also uses a PostgreSQL advisory lock per resource through the
+provider call and database write, preventing concurrent servers from creating
+two assets for the same recording.
 
-Provider credentials, signing keys, and licence configuration must be stored
-only as workspace secrets. They must never be committed to source, embedded in
-client code, or returned through the LMS API. The future provider adapter must:
+Provider credentials, signing keys, and license configuration are workspace
+secrets named `MUX_TOKEN_ID`, `MUX_TOKEN_SECRET`, `MUX_DRM_CONFIGURATION_ID`,
+`MUX_SIGNING_KEY_ID`, and `MUX_SIGNING_KEY`. They must never be committed to
+source or embedded in client code. The provider adapter:
 
 1. validate the existing HIMT viewer session and current course entitlement;
-2. request a short-lived provider playback token/server-side signed manifest;
-3. configure encrypted manifests and licence requests for Widevine, FairPlay,
-   and PlayReady; and
+2. requests short-lived provider playback and DRM tokens;
+3. configures encrypted adaptive playback and managed license requests for
+   Widevine, FairPlay, and PlayReady; and
 4. keep the provider asset ID, rotation policy, and migration status auditable.
 
 HIMT does not operate a proprietary DRM licence server.
