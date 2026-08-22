@@ -128,6 +128,9 @@ export const contentAccessLogs = pgTable("content_access_logs", {
   userAgent:     text("user_agent"),
   ipAddress:     text("ip_address"),
   outcomeDetail: text("outcome_detail"),
+  pageNumber:    integer("page_number"),
+  activityId:    text("activity_id"),
+  deviceContext: jsonb("device_context"),
   createdAt:     timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -141,11 +144,46 @@ export const contentTokens = pgTable("content_tokens", {
   id:         text("id").primaryKey(),         // crypto-random hex (64 chars)
   userId:     text("user_id"),                  // Clerk user ID; null for admin-session callers
   sessionId:  text("session_id").notNull(),     // bound to the session that issued the token
+  viewerSessionId: text("viewer_session_id"),
   resourceId: text("resource_id").notNull(),
   expiresAt:  timestamp("expires_at").notNull(),
   usedAt:     timestamp("used_at"),             // null until consumed; never reusable after set
   createdAt:  timestamp("created_at").defaultNow().notNull(),
 });
+
+/** Short-lived protected viewer sessions. HLS manifests, keys, and segments are
+ * all checked against this record so revocation is effective mid-playback. */
+export const protectedViewerSessions = pgTable("protected_viewer_sessions", {
+  id:                text("id").primaryKey(),
+  userId:            text("user_id"),
+  sessionId:         text("session_id").notNull(),
+  resourceId:        text("resource_id").notNull(),
+  expiresAt:         timestamp("expires_at").notNull(),
+  revokedAt:         timestamp("revoked_at"),
+  accessibilityMode: boolean("accessibility_mode").notNull().default(false),
+  watermarkConfig:   jsonb("watermark_config").default({}),
+  createdAt:         timestamp("created_at").defaultNow().notNull(),
+  lastSeenAt:        timestamp("last_seen_at").defaultNow().notNull(),
+});
+
+/** Durable learner playback state; opening a player is not completion. */
+export const protectedPlaybackProgress = pgTable("protected_playback_progress", {
+  id:              text("id").primaryKey(),
+  userId:          text("user_id").notNull(),
+  resourceId:      text("resource_id").notNull(),
+  courseId:        text("course_id").notNull(),
+  viewerSessionId: text("viewer_session_id"),
+  positionSeconds: integer("position_seconds").notNull().default(0),
+  durationSeconds: integer("duration_seconds").notNull().default(0),
+  playbackRate:   text("playback_rate").notNull().default("1"),
+  captionsEnabled: boolean("captions_enabled").notNull().default(false),
+  completed:       boolean("completed").notNull().default(false),
+  completedAt:     timestamp("completed_at"),
+  updatedAt:       timestamp("updated_at").defaultNow().notNull(),
+  createdAt:       timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("protected_playback_progress_user_resource_unique").on(table.userId, table.resourceId),
+]);
 
 // ─── Learner-facing courses ───────────────────────────────────────────────────
 
@@ -334,6 +372,10 @@ export const courseResources = pgTable("course_resources", {
   storagePath:     text("storage_path"),               // /objects/… path in App Storage
   checksum:        text("checksum"),
   recoveryMethod:  text("recovery_method"),            // download | preview_hls | external_reference | storage_resume
+  captionsUrl:     text("captions_url"),               // managed, signed caption asset when available
+  transcript:      text("transcript"),                 // approved accessible transcript
+  drmProvider:     text("drm_provider"),               // e.g. mux | buyDRM; no credentials are stored here
+  drmAssetId:      text("drm_asset_id"),
   error:           text("error"),
   createdAt:       timestamp("created_at").defaultNow().notNull(),
   updatedAt:       timestamp("updated_at").defaultNow().notNull(),
@@ -442,3 +484,5 @@ export type CourseStructureImportJobItem = typeof courseStructureImportJobItems.
 export type CourseResource = typeof courseResources.$inferSelect;
 export type CourseResourceImportJob = typeof courseResourceImportJobs.$inferSelect;
 export type CourseResourceImportJobItem = typeof courseResourceImportJobItems.$inferSelect;
+export type ProtectedViewerSession = typeof protectedViewerSessions.$inferSelect;
+export type ProtectedPlaybackProgress = typeof protectedPlaybackProgress.$inferSelect;

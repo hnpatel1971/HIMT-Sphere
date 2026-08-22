@@ -23,12 +23,16 @@ Both `/admin-view` and `/open` return 403 for any resource that is not `Video` o
 
 ---
 
-**Publitas publications are served via server-side redirect, not client JSON.**
-The Publitas viewer URL is never returned in any API response. The `/open` (and `/admin-view`) endpoint redirects to the Publitas URL server-side. The page-count endpoint returns `{ externalViewer: "publitas" }` so the frontend knows to render an iframe pointing at the server endpoint rather than trying to page-render the HTML viewer.
+**External interactive publications are denied until privately migrated.**
+The learner and admin protected routes never redirect to a third-party viewer,
+including Publitas. Such resources return an unavailable/migration response.
 
-**Why:** Returning the Publitas URL in client JSON would allow a determined user to bypass enrollment gating by copying the URL. The server-redirect approach keeps the URL opaque.
+**Why:** A server redirect still reveals the third-party URL to the browser and
+lets that host serve content after the HIMT learner session has been revoked.
 
-**How to apply:** Any future web-publication provider that serves interactive HTML (not a downloadable PDF) should follow the same pattern: exempt from 403, detect in page-count, return `externalViewer` marker, render as iframe in `DocumentPageViewer`.
+**How to apply:** Do not make an exception for third-party HTML viewers. Import
+the source into private HIMT storage and use the protected renderer, or use a
+managed provider with its own short-lived authorization handoff.
 
 ---
 

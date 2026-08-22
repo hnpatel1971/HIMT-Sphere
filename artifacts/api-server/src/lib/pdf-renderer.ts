@@ -175,19 +175,28 @@ async function renderPageToBuffer(pdfPath: string, pageNum: number, dpi: number)
  * line1 — primary line  (e.g. "Jane Doe · jane@example.com")
  * line2 — secondary line (e.g. "CONFIDENTIAL · 21 Aug 2026, 14:30")
  */
-async function applyWatermark(png: Buffer, line1: string, line2: string): Promise<Buffer> {
+export interface WatermarkOptions {
+  pattern?: "tile" | "single";
+  position?: "diagonal" | "horizontal";
+}
+
+async function applyWatermark(png: Buffer, line1: string, line2: string, options: WatermarkOptions = {}): Promise<Buffer> {
   const { width: w = 800, height: h = 1000 } = await sharp(png).metadata();
 
   const tW = 400;
   const tH = 160;
   let tiles = "";
+  const pattern = options.pattern ?? "tile";
+  const angle = options.position === "horizontal" ? 0 : -30;
 
-  for (let row = -1; row <= Math.ceil(h / tH) + 1; row++) {
-    for (let col = -1; col <= Math.ceil(w / tW) + 1; col++) {
+  const rows = pattern === "single" ? [Math.ceil(h / 2 / tH)] : Array.from({ length: Math.ceil(h / tH) + 3 }, (_, i) => i - 1);
+  const cols = pattern === "single" ? [Math.ceil(w / 2 / tW)] : Array.from({ length: Math.ceil(w / tW) + 3 }, (_, i) => i - 1);
+  for (const row of rows) {
+    for (const col of cols) {
       // Stagger every other row by half a tile width (DRM-011)
-      const cx = col * tW + (row % 2 !== 0 ? tW / 2 : 0) + tW / 2;
+      const cx = col * tW + (pattern === "tile" && row % 2 !== 0 ? tW / 2 : 0) + tW / 2;
       const cy = row * tH + tH / 2;
-      tiles += `<g transform="translate(${cx},${cy}) rotate(-30)">
+      tiles += `<g transform="translate(${cx},${cy}) rotate(${angle})">
         <text y="-8" text-anchor="middle"
           font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="bold"
           fill="rgba(50,50,50,0.22)">${escapeXml(line1)}</text>
@@ -221,6 +230,7 @@ export interface RenderPageOpts {
   dpi?: number;
   /** MIME type of the source document (used to set the correct file extension for LibreOffice) */
   mimeType?: string | null;
+  watermarkOptions?: WatermarkOptions;
 }
 
 /**
@@ -229,14 +239,14 @@ export interface RenderPageOpts {
  * The temp directory is always cleaned up, even on error.
  */
 export async function renderProtectedPage(opts: RenderPageOpts): Promise<Buffer> {
-  const { pdfStream, pageNum, watermarkLine1, watermarkLine2, dpi = 150, mimeType } = opts;
+  const { pdfStream, pageNum, watermarkLine1, watermarkLine2, dpi = 150, mimeType, watermarkOptions } = opts;
   const dir = await mkdtemp(join(tmpdir(), "himt-pdf-"));
   const inputPath = join(dir, `doc${extForMime(mimeType)}`);
   try {
     await streamToFile(pdfStream, inputPath);
     const pdfPath = await ensurePdf(inputPath, dir);
     const raw = await renderPageToBuffer(pdfPath, pageNum, dpi);
-    return await applyWatermark(raw, watermarkLine1, watermarkLine2);
+    return await applyWatermark(raw, watermarkLine1, watermarkLine2, watermarkOptions);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -258,6 +268,26 @@ export async function getPageCountFromStream(
     return await getPageCountFromFile(pdfPath);
   } catch {
     return null; // Unsupported format or conversion failed
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Extract a plain-text representation for HIMT's approved accessible mode.
+ * This is intentionally a separate, explicitly requested path: the original
+ * document is still converted and read only on the server.
+ */
+export async function getAccessibleTextFromStream(
+  pdfStream: Readable,
+  mimeType?: string | null,
+): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "himt-accessible-"));
+  const inputPath = join(dir, `doc${extForMime(mimeType)}`);
+  try {
+    await streamToFile(pdfStream, inputPath);
+    const pdfPath = await ensurePdf(inputPath, dir);
+    return (await exec("pdftotext", ["-layout", pdfPath, "-"])).trim();
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }

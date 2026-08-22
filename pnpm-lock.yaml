@@ -160,6 +160,9 @@ importers:
       '@replit/connectors-sdk':
         specifier: ^0.4.1
         version: 0.4.1
+      hls.js:
+        specifier: ^1.7.1
+        version: 1.7.1
     devDependencies:
       prettier:
         specifier: ^3.9.6
@@ -394,6 +397,9 @@ importers:
       framer-motion:
         specifier: 'catalog:'
         version: 12.42.2(react-dom@19.1.4(react@19.1.4))(react@19.1.4)
+      hls.js:
+        specifier: ^1.6.12
+        version: 1.7.1
       input-otp:
         specifier: ^1.4.2
         version: 1.4.2(react-dom@19.1.4(react@19.1.4))(react@19.1.4)
@@ -2689,6 +2695,9 @@ packages:
 
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
+
+  hls.js@1.7.1:
+    resolution: {integrity: sha512-DlzIkeBAS9IIQ432k3BUf3HlwbsR0+trB1i2lDdN2gUkNkrehFurh0/48M5c1/EjlDkdGng1gwZIpwyPxvdZ/g==}
 
   html-entities@2.6.0:
     resolution: {integrity: sha512-kig+rMn/QOVRvr7c86gQ8lWXq+Hkv6CbAH1hLu+RG338StTpE8Z0b44SDVaqVu7HGKf27frdmUYEs9hTUX/cLQ==}
@@ -5819,6 +5828,8 @@ snapshots:
       function-bind: 1.1.2
 
   help-me@5.0.0: {}
+
+  hls.js@1.7.1: {}
 
   html-entities@2.6.0: {}
 

@@ -1,10 +1,10 @@
 import { Router, type IRouter } from "express";
 import "express-session"; // ensure SessionData augmentation from auth.ts is loaded
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scryptSync } from "crypto";
 import { spawn } from "child_process";
 import { createServer } from "http";
 import { Readable } from "stream";
-import { and, desc, eq, gte, ilike, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, isNull, lt, or, sql } from "drizzle-orm";
 import { clerkClient, getAuth } from "@clerk/express";
 import { db, pool } from "@workspace/db";
 import { parseTriByteCoursePage, type TriByteScrapedCourse } from "../lib/tribyte-course-parser";
@@ -29,7 +29,13 @@ import {
   storeResourceStream,
 } from "../lib/resource-storage";
 import { inspectStoredResource, resumeStoredResourceImport } from "../lib/resource-recovery";
-import { renderProtectedPage, getPageCountFromStream } from "../lib/pdf-renderer";
+import { renderProtectedPage, getAccessibleTextFromStream, getPageCountFromStream } from "../lib/pdf-renderer";
+import {
+  prepareProtectedHls,
+  readProtectedHlsFile,
+  removeProtectedHls,
+  type ProtectedHlsPackage,
+} from "../lib/protected-video";
 import {
   courses as coursesTable,
   assignments as assignmentsTable,
@@ -60,6 +66,8 @@ import {
   appSettings as appSettingsTable,
   contentAccessLogs as contentAccessLogsTable,
   contentTokens as contentTokensTable,
+  protectedPlaybackProgress as protectedPlaybackProgressTable,
+  protectedViewerSessions as protectedViewerSessionsTable,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import {
@@ -575,6 +583,54 @@ export async function ensureAccessLogsTable() {
     ALTER TABLE learner_course_access
     ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
   `);
+  await pool.query(`
+    ALTER TABLE content_access_logs
+      ADD COLUMN IF NOT EXISTS page_number INTEGER,
+      ADD COLUMN IF NOT EXISTS activity_id TEXT,
+      ADD COLUMN IF NOT EXISTS device_context JSONB
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS protected_viewer_sessions (
+      id                 TEXT PRIMARY KEY,
+      user_id            TEXT,
+      session_id         TEXT NOT NULL,
+      resource_id        TEXT NOT NULL,
+      expires_at         TIMESTAMPTZ NOT NULL,
+      revoked_at         TIMESTAMPTZ,
+      accessibility_mode BOOLEAN NOT NULL DEFAULT FALSE,
+      watermark_config   JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS protected_playback_progress (
+      id                TEXT PRIMARY KEY,
+      user_id           TEXT NOT NULL,
+      resource_id       TEXT NOT NULL,
+      course_id         TEXT NOT NULL,
+      viewer_session_id TEXT,
+      position_seconds  INTEGER NOT NULL DEFAULT 0,
+      duration_seconds  INTEGER NOT NULL DEFAULT 0,
+      playback_rate     TEXT NOT NULL DEFAULT '1',
+      captions_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
+      completed         BOOLEAN NOT NULL DEFAULT FALSE,
+      completed_at      TIMESTAMPTZ,
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS protected_playback_progress_user_resource_unique
+      ON protected_playback_progress (user_id, resource_id)
+  `);
+  await pool.query(`
+    ALTER TABLE course_resources
+      ADD COLUMN IF NOT EXISTS captions_url TEXT,
+      ADD COLUMN IF NOT EXISTS transcript TEXT,
+      ADD COLUMN IF NOT EXISTS drm_provider TEXT,
+      ADD COLUMN IF NOT EXISTS drm_asset_id TEXT
+  `);
 }
 
 // ── DRM-007: content access logging ──────────────────────────────────────────
@@ -591,9 +647,11 @@ async function logContentAccess(opts: {
   courseId: string;
   action: AccessAction;
   outcomeDetail?: string;
+  pageNumber?: number;
+  activityId?: string;
 }): Promise<void> {
   try {
-    const { req, resourceId, courseId, action, outcomeDetail } = opts;
+    const { req, resourceId, courseId, action, outcomeDetail, pageNumber, activityId } = opts;
     const clerkUserId = getAuth(req).userId ?? null;
     const sessionId   = req.sessionID ?? null;
     const userAgent   = (req.headers["user-agent"] ?? "").slice(0, 512) || null;
@@ -611,6 +669,12 @@ async function logContentAccess(opts: {
       userAgent,
       ipAddress:     rawIp?.slice(0, 64) ?? null,
       outcomeDetail: outcomeDetail?.slice(0, 500) ?? null,
+      pageNumber:    pageNumber ?? null,
+      activityId:    activityId?.slice(0, 160) ?? null,
+      deviceContext: {
+        platform: String(req.headers["sec-ch-ua-platform"] ?? "").slice(0, 100),
+        mobile: String(req.headers["sec-ch-ua-mobile"] ?? "").slice(0, 16),
+      },
     });
   } catch (err) {
     logger.warn({ err }, "content_access_logs insert failed — continuing");
@@ -781,7 +845,7 @@ router.get("/courses/:courseId", async (req, res) => {
       // Expose sourceUrl for Video and Recording types so the player can detect
       // YouTube/Vimeo embeds and direct media URLs. Documents redact it to prevent
       // clients from detecting and directly accessing external document URLs (e.g. Publitas).
-      sourceUrl: (resource.resourceType === "Video" || resource.resourceType === "Recording") ? resource.sourceUrl : null,
+      sourceUrl: null,
       mimeType: resource.mimeType,
       hasStoredFile: Boolean(resource.storagePath),
     });
@@ -1436,7 +1500,7 @@ router.get("/curriculum/courses/:id/topics", async (req, res) => {
       status: r.status,
       order: r.order,
       // Expose sourceUrl for Video/Recording; redact for Documents (prevents external URL bypass).
-      sourceUrl: (r.type === "Video" || r.type === "Recording") ? r.sourceUrl : null,
+      sourceUrl: null,
       mimeType: r.mimeType,
       hasStoredFile: Boolean(r.storagePath),
       openUrl: r.status === "ready" ? `/api/curriculum/resources/${r.id}/admin-view` : null,
@@ -2209,13 +2273,13 @@ async function learnerCanAccessCourse(req: import("express").Request, courseId: 
   if (req.session.isAdmin === true) return true;
   const learner = await resolveActiveLearner(req);
   if (!learner) return false;
-  const [access] = await db.select({ id: learnerCourseAccessTable.id })
+  const [access] = await db.select({ id: learnerCourseAccessTable.id, expiresAt: learnerCourseAccessTable.expiresAt })
     .from(learnerCourseAccessTable)
     .where(and(
       eq(learnerCourseAccessTable.clerkUserId, learner.clerkUserId),
       eq(learnerCourseAccessTable.courseId, courseId),
     ));
-  return Boolean(access);
+  return Boolean(access && (!access.expiresAt || access.expiresAt > new Date()));
 }
 
 router.get("/learner/me", async (req, res) => {
@@ -3821,12 +3885,14 @@ export async function ensureContentTokensTable() {
       id          TEXT PRIMARY KEY,
       user_id     TEXT,
       session_id  TEXT NOT NULL,
+      viewer_session_id TEXT,
       resource_id TEXT NOT NULL,
       expires_at  TIMESTAMPTZ NOT NULL,
       used_at     TIMESTAMPTZ,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE content_tokens ADD COLUMN IF NOT EXISTS viewer_session_id TEXT`);
   // Clean up tokens that expired more than 60 s ago every 5 minutes.
   // Keeps the table small without disrupting any in-flight request.
   const cleanup = async () => {
@@ -3856,22 +3922,32 @@ async function verifyAndConsumeToken(
   token: string | undefined,
   resourceId: string,
   req: import("express").Request,
-): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; viewerSessionId: string | null } | { ok: false; status: number; error: string }> {
   if (!token) return { ok: false, status: 403, error: "Content token required — POST /curriculum/resources/:id/token first" };
   const [row] = await db.select().from(contentTokensTable).where(eq(contentTokensTable.id, token));
   if (!row)                          return { ok: false, status: 403, error: "Content token is invalid" };
   if (row.resourceId !== resourceId) return { ok: false, status: 403, error: "Content token is not valid for this resource" };
   if (row.usedAt)                    return { ok: false, status: 403, error: "Content token has already been used" };
   if (new Date() > row.expiresAt)    return { ok: false, status: 403, error: "Content token has expired" };
-  // Session binding — admin: Express session ID; learner: Clerk session ID
+  // User and session binding — a captured token cannot cross accounts or sessions.
   const isAdminCaller    = req.session.isAdmin === true;
+  const currentUserId    = isAdminCaller ? null : getAuth(req).userId;
   const currentSession   = isAdminCaller
     ? (req.sessionID ?? "")
     : (getAuth(req).sessionId ?? req.sessionID ?? "");
+  if (row.userId !== currentUserId) return { ok: false, status: 403, error: "Content token user mismatch" };
   if (row.sessionId !== currentSession) return { ok: false, status: 403, error: "Content token session mismatch" };
-  // Atomically mark as used to prevent replay
-  await db.update(contentTokensTable).set({ usedAt: new Date() }).where(eq(contentTokensTable.id, token));
-  return { ok: true };
+  // Atomically mark as used to prevent a concurrent replay.
+  const [consumed] = await db.update(contentTokensTable)
+    .set({ usedAt: new Date() })
+    .where(and(
+      eq(contentTokensTable.id, token),
+      isNull(contentTokensTable.usedAt),
+      gt(contentTokensTable.expiresAt, new Date()),
+    ))
+    .returning({ id: contentTokensTable.id });
+  if (!consumed) return { ok: false, status: 403, error: "Content token has already been used or expired" };
+  return { ok: true, viewerSessionId: row.viewerSessionId };
 }
 
 /**
@@ -3886,16 +3962,17 @@ router.post("/curriculum/resources/:resourceId/token", async (req, res) => {
     res.status(401).json({ error: "Sign in to request a content token" }); return;
   }
   const resourceId = String(req.params.resourceId);
-  // Learners must be enrolled in the course that owns this resource
+  const [resource] = await db
+    .select({ courseId: courseResourcesTable.courseId, status: courseResourcesTable.status })
+    .from(courseResourcesTable)
+    .where(eq(courseResourcesTable.id, resourceId));
+  if (!resource || resource.status !== "ready") {
+    res.status(404).json({ error: "Resource not found" }); return;
+  }
+  // Learners must be enrolled in the course that owns this resource.
   if (!isAdminUser) {
-    const [resource] = await db
-      .select({ courseId: courseResourcesTable.courseId, status: courseResourcesTable.status })
-      .from(courseResourcesTable)
-      .where(eq(courseResourcesTable.id, resourceId));
-    if (!resource || resource.status !== "ready") {
-      res.status(404).json({ error: "Resource not found" }); return;
-    }
     if (!(await learnerCanAccessCourse(req, resource.courseId))) {
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "token_not_enrolled_or_expired" });
       res.status(403).json({ error: "Not enrolled in this course" }); return;
     }
   }
@@ -3903,15 +3980,255 @@ router.post("/curriculum/resources/:resourceId/token", async (req, res) => {
     ? (req.sessionID ?? "admin-session")
     : (clerkAuth.sessionId ?? req.sessionID ?? "clerk-session");
   const token     = randomBytes(32).toString("hex");
+  const viewerSessionId = `viewer-${randomBytes(18).toString("hex")}`;
   const expiresAt = new Date(Date.now() + 60_000);
-  await db.insert(contentTokensTable).values({ id: token, userId: clerkAuth.userId ?? null, sessionId, resourceId, expiresAt });
+  const accessibilityMode = req.body?.accessibilityMode === true;
+  await db.insert(protectedViewerSessionsTable).values({
+    id: viewerSessionId,
+    userId: clerkAuth.userId ?? null,
+    sessionId,
+    resourceId,
+    expiresAt: new Date(Date.now() + 15 * 60_000),
+    accessibilityMode,
+  });
+  await db.insert(contentTokensTable).values({
+    id: token, userId: clerkAuth.userId ?? null, sessionId, resourceId, expiresAt, viewerSessionId,
+  });
+  await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_attempt", outcomeDetail: accessibilityMode ? "token:accessible" : "token:viewer" });
   res.json({ token, expiresAt: expiresAt.toISOString() });
 });
 
-// Admin-only resource preview — no enrollment check, just admin auth
-// Resource preview — accepts admin session OR any signed-in Clerk user.
-// Ready resources are approved content; any authenticated user (admin or learner)
-// may view them. Unauthenticated requests are rejected.
+// ─── Protected adaptive video playback ────────────────────────────────────────
+
+const hlsPackages = new Map<string, ProtectedHlsPackage>();
+
+async function cleanExpiredHlsPackages(): Promise<void> {
+  const expired = [...hlsPackages.entries()].filter(([, item]) => item.expiresAt <= new Date());
+  await Promise.all(expired.map(async ([id, item]) => {
+    hlsPackages.delete(id);
+    await removeProtectedHls(item);
+  }));
+}
+
+async function ensureHlsPackage(
+  resource: typeof courseResourcesTable.$inferSelect,
+  viewerSession: typeof protectedViewerSessionsTable.$inferSelect,
+): Promise<ProtectedHlsPackage> {
+  await cleanExpiredHlsPackages();
+  const existing = hlsPackages.get(viewerSession.id);
+  if (existing && existing.expiresAt > new Date()) return existing;
+  if (existing) await removeProtectedHls(existing);
+  if (!resource.storagePath) throw new Error("Protected source video is unavailable");
+  const storedFile = await getStoredResource(resource.storagePath);
+  const keyUri = `/api/curriculum/resources/${resource.id}/playback/key?session=${encodeURIComponent(viewerSession.id)}`;
+  // Rebuilding after a restart or on another instance must yield the exact same
+  // AES key. The key is never persisted or sent except via its authorized route.
+  const encryptionKey = createHmac("sha256", process.env.SESSION_SECRET ?? "missing-session-secret")
+    .update(`himt-hls:${viewerSession.id}:${resource.id}`)
+    .digest()
+    .subarray(0, 16);
+  const packageInfo = await prepareProtectedHls(storedFile, keyUri, viewerSession.expiresAt, encryptionKey);
+  hlsPackages.set(viewerSession.id, packageInfo);
+  return packageInfo;
+}
+
+function setProtectedContentHeaders(res: import("express").Response, contentType: string): void {
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
+}
+
+async function authorizeViewerSession(
+  req: import("express").Request,
+  resourceId: string,
+  viewerSessionId: string | undefined,
+): Promise<{ ok: true; session: typeof protectedViewerSessionsTable.$inferSelect; resource: typeof courseResourcesTable.$inferSelect } | { ok: false; status: number; error: string }> {
+  if (!viewerSessionId) return { ok: false, status: 403, error: "Protected playback session required" };
+  const [viewerSession] = await db.select().from(protectedViewerSessionsTable)
+    .where(eq(protectedViewerSessionsTable.id, viewerSessionId));
+  if (!viewerSession || viewerSession.resourceId !== resourceId || viewerSession.revokedAt || viewerSession.expiresAt <= new Date()) {
+    return { ok: false, status: 403, error: "Protected playback session expired or revoked" };
+  }
+  const isAdmin = req.session.isAdmin === true;
+  const currentUserId = isAdmin ? null : getAuth(req).userId;
+  const currentSessionId = isAdmin ? req.sessionID : (getAuth(req).sessionId ?? req.sessionID);
+  if (viewerSession.userId !== currentUserId || viewerSession.sessionId !== currentSessionId) {
+    return { ok: false, status: 403, error: "Protected playback session does not match this sign-in" };
+  }
+  const [resource] = await db.select().from(courseResourcesTable).where(eq(courseResourcesTable.id, resourceId));
+  if (!resource || resource.status !== "ready") return { ok: false, status: 404, error: "Learning resource is not available" };
+  if (!isAdmin && !(await learnerCanAccessCourse(req, resource.courseId))) {
+    return { ok: false, status: 403, error: "Course access has expired or been revoked" };
+  }
+  await db.update(protectedViewerSessionsTable).set({ lastSeenAt: new Date() })
+    .where(eq(protectedViewerSessionsTable.id, viewerSessionId));
+  return { ok: true, session: viewerSession, resource };
+}
+
+function playbackSessionFromRequest(req: import("express").Request): string | undefined {
+  const value = req.query.session ?? req.body?.session;
+  return typeof value === "string" && value ? value : undefined;
+}
+
+router.post("/curriculum/resources/:resourceId/playback-session", async (req, res) => {
+  const resourceId = String(req.params.resourceId);
+  const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), resourceId, req);
+  if (!tokenResult.ok) {
+    await logContentAccess({ req, resourceId, courseId: "unknown", action: "view_denied", outcomeDetail: `playback_token:${tokenResult.error}` });
+    res.status(tokenResult.status).json({ error: tokenResult.error }); return;
+  }
+  const authorization = await authorizeViewerSession(req, resourceId, tokenResult.viewerSessionId ?? undefined);
+  if (!authorization.ok) {
+    await logContentAccess({ req, resourceId, courseId: "unknown", action: "view_denied", outcomeDetail: `playback:${authorization.error}` });
+    res.status(authorization.status).json({ error: authorization.error }); return;
+  }
+  const { resource, session: viewerSession } = authorization;
+  if (!["Video", "Recording"].includes(resource.resourceType)) {
+    res.status(400).json({ error: "This resource is not a video recording" }); return;
+  }
+  if (!resource.storagePath) {
+    // YouTube/Vimeo and other external providers are deliberately not presented
+    // as protected playback. A managed multi-DRM provider migration is required.
+    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "adaptive_provider_required" });
+    res.status(409).json({
+      error: "This video is not available through HIMT protected playback.",
+      code: "ADAPTIVE_PROVIDER_REQUIRED",
+    });
+    return;
+  }
+  try {
+    await ensureHlsPackage(resource, viewerSession);
+    const clerkUserId = getAuth(req).userId;
+    const [progress] = clerkUserId
+      ? await db.select().from(protectedPlaybackProgressTable)
+        .where(and(eq(protectedPlaybackProgressTable.userId, clerkUserId), eq(protectedPlaybackProgressTable.resourceId, resourceId)))
+      : [];
+    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "adaptive_playback_session" });
+    res.json({
+      manifestUrl: `/api/curriculum/resources/${resourceId}/playback/manifest?session=${encodeURIComponent(viewerSession.id)}`,
+      expiresAt: viewerSession.expiresAt.toISOString(),
+      positionSeconds: progress?.positionSeconds ?? 0,
+      captions: resource.captionsUrl
+        ? { url: `/api/curriculum/resources/${resourceId}/playback/captions?session=${encodeURIComponent(viewerSession.id)}` }
+        : null,
+      transcript: resource.transcript ?? null,
+      provider: "himt-encrypted-hls",
+      drmProviderRequiredForMultiDrm: true,
+    });
+  } catch (error) {
+    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_error", outcomeDetail: "adaptive_packaging_failed" });
+    logger.error({ error }, "Could not prepare protected adaptive playback");
+    res.status(422).json({ error: "Could not prepare protected adaptive playback" });
+  }
+});
+
+router.get("/curriculum/resources/:resourceId/playback/manifest", async (req, res) => {
+  const resourceId = String(req.params.resourceId);
+  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
+  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
+  try {
+    const packageInfo = await ensureHlsPackage(authorization.resource, authorization.session);
+    const manifest = (await readProtectedHlsFile(packageInfo, "manifest.m3u8")).toString("utf8");
+    const session = encodeURIComponent(authorization.session.id);
+    const protectedManifest = manifest.split("\n").map(line => (
+      line && !line.startsWith("#")
+        ? `/api/curriculum/resources/${resourceId}/playback/segment/${encodeURIComponent(line.split("/").pop() ?? "")}?session=${session}`
+        : line
+    )).join("\n");
+    setProtectedContentHeaders(res, "application/vnd.apple.mpegurl");
+    res.send(protectedManifest);
+  } catch {
+    res.status(410).json({ error: "Playback session has ended" });
+  }
+});
+
+router.get("/curriculum/resources/:resourceId/playback/segment/:segment", async (req, res) => {
+  const resourceId = String(req.params.resourceId);
+  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
+  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
+  try {
+    const packageInfo = await ensureHlsPackage(authorization.resource, authorization.session);
+    setProtectedContentHeaders(res, "video/mp2t");
+    res.end(await readProtectedHlsFile(packageInfo, String(req.params.segment)));
+  } catch {
+    res.status(404).json({ error: "Playback segment is unavailable" });
+  }
+});
+
+router.get("/curriculum/resources/:resourceId/playback/key", async (req, res) => {
+  const resourceId = String(req.params.resourceId);
+  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
+  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
+  try {
+    const packageInfo = await ensureHlsPackage(authorization.resource, authorization.session);
+    setProtectedContentHeaders(res, "application/octet-stream");
+    res.end(await readProtectedHlsFile(packageInfo, "content.key"));
+  } catch {
+    res.status(404).json({ error: "Playback key is unavailable" });
+  }
+});
+
+router.get("/curriculum/resources/:resourceId/playback/captions", async (req, res) => {
+  const resourceId = String(req.params.resourceId);
+  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
+  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
+  const sourceUrl = authorization.resource.captionsUrl;
+  if (!sourceUrl || !/^https:\/\//i.test(sourceUrl)) {
+    res.status(404).json({ error: "Captions are not available" }); return;
+  }
+  try {
+    const response = await fetch(sourceUrl, { redirect: "error" });
+    if (!response.ok) throw new Error(`caption source returned ${response.status}`);
+    setProtectedContentHeaders(res, "text/vtt; charset=utf-8");
+    res.send(await response.text());
+  } catch (error) {
+    logger.warn({ error, resourceId }, "Could not deliver protected captions");
+    res.status(502).json({ error: "Captions could not be loaded" });
+  }
+});
+
+router.patch("/curriculum/resources/:resourceId/playback-progress", async (req, res) => {
+  const resourceId = String(req.params.resourceId);
+  const authorization = await authorizeViewerSession(req, resourceId, playbackSessionFromRequest(req));
+  if (!authorization.ok) { res.status(authorization.status).json({ error: authorization.error }); return; }
+  const clerkUserId = getAuth(req).userId;
+  if (!clerkUserId) { res.status(403).json({ error: "Learner playback progress requires a learner sign-in" }); return; }
+  const positionSeconds = Math.max(0, Math.floor(Number(req.body?.positionSeconds) || 0));
+  const durationSeconds = Math.max(0, Math.floor(Number(req.body?.durationSeconds) || 0));
+  const playbackRate = Number(req.body?.playbackRate);
+  const safeRate = Number.isFinite(playbackRate) && playbackRate >= 0.5 && playbackRate <= 2 ? String(playbackRate) : "1";
+  const captionsEnabled = req.body?.captionsEnabled === true;
+  const completed = durationSeconds > 0 && positionSeconds / durationSeconds >= 0.9;
+  const current = await db.select({ id: protectedPlaybackProgressTable.id, completed: protectedPlaybackProgressTable.completed })
+    .from(protectedPlaybackProgressTable)
+    .where(and(eq(protectedPlaybackProgressTable.userId, clerkUserId), eq(protectedPlaybackProgressTable.resourceId, resourceId)));
+  const values = {
+    positionSeconds, durationSeconds, playbackRate: safeRate, captionsEnabled,
+    viewerSessionId: authorization.session.id, completed: completed || Boolean(current[0]?.completed),
+    completedAt: completed && !current[0]?.completed ? new Date() : undefined,
+    updatedAt: new Date(),
+  };
+  if (current[0]) {
+    await db.update(protectedPlaybackProgressTable).set(values).where(eq(protectedPlaybackProgressTable.id, current[0].id));
+  } else {
+    await db.insert(protectedPlaybackProgressTable).values({
+      id: `playback-${randomBytes(12).toString("hex")}`,
+      userId: clerkUserId, resourceId, courseId: authorization.resource.courseId, ...values,
+    });
+  }
+  await logContentAccess({
+    req, resourceId, courseId: authorization.resource.courseId, action: "view_success",
+    outcomeDetail: completed ? "playback_completed_90_percent" : `playback_progress:${positionSeconds}`,
+  });
+  res.json({ positionSeconds, durationSeconds, completed: values.completed });
+});
+
+// Admin-only resource preview — learner delivery must always use /open routes,
+// where current enrollment is rechecked before every protected request.
 router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
   // Block direct browser navigation (address bar / new tab) — resources must be
   // fetched by the in-app previewer, not opened directly as a URL.
@@ -3921,11 +4238,9 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
     return;
   }
   const isAdminUser = req.session.isAdmin === true;
-  const clerkUserId = getAuth(req).userId;
-  if (!isAdminUser && !clerkUserId) {
-    // DRM-007: log auth failure even before resource lookup (use param ID)
-    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: "unauthenticated" });
-    res.status(401).json({ error: "Sign in to preview this resource" });
+  if (!isAdminUser) {
+    await logContentAccess({ req, resourceId: String(req.params.resourceId), courseId: "unknown", action: "view_denied", outcomeDetail: "admin_session_required" });
+    res.status(403).json({ error: "Admin access required" });
     return;
   }
   // DRM-003: verify and consume one-time content token before any content is delivered
@@ -3944,27 +4259,25 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
       res.status(404).json({ error: "Resource not found" });
       return;
     }
+    if (resource.resourceType === "Video" || resource.resourceType === "Recording") {
+      // Raw MP4 delivery is deliberately disabled. Protected playback is issued
+      // through the short-lived encrypted HLS session endpoint above.
+      res.status(410).json({
+        error: "Raw media delivery is disabled. Request a protected playback session instead.",
+        playbackEndpoint: `/api/curriculum/resources/${resourceId}/playback-session`,
+      });
+      return;
+    }
     if (!resource.storagePath) {
       if (!resource.sourceUrl) {
         res.status(404).json({ error: "Resource has no content" });
         return;
       }
-      // DRM: Documents and other non-media types must go through the page-image renderer.
-      // Recording resources stream raw bytes (they are video/audio); Publitas publications
-      // are web-hosted interactive content (not downloadable files) so they redirect to the
-      // viewer directly (the URL is not exposed in client JSON, only via server-side redirect).
-      const isMediaType = resource.resourceType === "Video" || resource.resourceType === "Recording";
-      const isPublitasResource = resource.sourceUrl.includes("view.publitas.com");
-      if (!isMediaType && !isPublitasResource) {
-        await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_document_redirect_blocked" });
-        res.status(403).json({
-          error: "Document content must be accessed through the secure page viewer.",
-          hint: "Use GET /admin-view/page-count and /admin-view/page/:n instead.",
-        });
-        return;
-      }
-      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "external_redirect" });
-      res.redirect(302, resource.sourceUrl);
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "external_document_not_renderable" });
+      res.status(409).json({
+        error: "This external publication cannot be delivered through the protected viewer.",
+        hint: "Migrate it to private HIMT storage before making it available.",
+      });
       return;
     }
     // DRM: stored non-media files are served only via the page-image renderer.
@@ -3999,11 +4312,8 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
 
 router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
   // DRM-005: block direct browser navigation — must be fetched by the in-app viewer.
-  // Exception: iframes are allowed so that Publitas publications can be embedded via
-  // a server-side redirect without exposing the Publitas URL to the client JavaScript.
   const fetchMode = req.headers["sec-fetch-mode"];
-  const fetchDest = req.headers["sec-fetch-dest"] as string | undefined;
-  if ((fetchMode === "navigate" || fetchMode === "nested-navigate") && fetchDest !== "iframe") {
+  if (fetchMode === "navigate" || fetchMode === "nested-navigate") {
     res.status(403).json({ error: "This resource can only be viewed inside the application." });
     return;
   }
@@ -4051,29 +4361,25 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
         }
       }
     }
+    if (resource.resourceType === "Video" || resource.resourceType === "Recording") {
+      // Never stream stored MP4 bytes through the learner route. A learner must
+      // obtain a bound, expiring adaptive playback session instead.
+      res.status(410).json({
+        error: "Raw media delivery is disabled. Request a protected playback session instead.",
+        playbackEndpoint: `/api/curriculum/resources/${resourceId}/playback-session`,
+      });
+      return;
+    }
     if (!resource.storagePath) {
       if (isTriByteUrl(resource.sourceUrl)) {
         res.status(404).json({ error: "Learning resource is not available" });
         return;
       }
-      // DRM: external Documents must go through the page-image renderer.
-      // Recording resources and Publitas web publications are exempt:
-      // - Recordings are media (video/audio) that stream raw bytes
-      // - Publitas URLs are for interactive web-hosted publications (not downloadable files);
-      //   the viewer URL is not included in client JSON — it reaches the browser only via
-      //   this server-side redirect, preserving DRM intent while restoring functionality.
-      const isMediaType = resource.resourceType === "Video" || resource.resourceType === "Recording";
-      const isPublitasResource = resource.sourceUrl?.includes("view.publitas.com");
-      if (!isMediaType && !isPublitasResource) {
-        await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_document_redirect_blocked" });
-        res.status(403).json({
-          error: "Document content must be accessed through the secure page viewer.",
-          hint: "Use GET /open/page-count and /open/page/:n instead.",
-        });
-        return;
-      }
-      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "external_redirect" });
-      res.redirect(302, resource.sourceUrl);
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "external_document_not_renderable" });
+      res.status(409).json({
+        error: "This external publication cannot be delivered through the protected viewer.",
+        hint: "Ask an administrator to migrate it to private HIMT storage.",
+      });
       return;
     }
     // DRM: stored non-media files are served only via the page-image renderer.
@@ -4121,25 +4427,97 @@ async function fetchExternalDocumentStream(sourceUrl: string): Promise<Readable>
   return Readable.from(response.body as AsyncIterable<Uint8Array>);
 }
 
-/** Build watermark lines from the current authenticated user. */
-async function getWatermarkInfo(req: import("express").Request): Promise<{ line1: string; line2: string }> {
+type ProtectedWatermarkConfig = {
+  includeName: boolean;
+  includeLearnerId: boolean;
+  includeTimestamp: boolean;
+  includeSessionId: boolean;
+  confidentialityText: string;
+  pattern: "tile" | "single";
+  position: "diagonal" | "horizontal";
+};
+
+const DEFAULT_WATERMARK_CONFIG: ProtectedWatermarkConfig = {
+  includeName: true,
+  includeLearnerId: true,
+  includeTimestamp: true,
+  includeSessionId: false,
+  confidentialityText: "CONFIDENTIAL — HIMT LEARNING MATERIAL",
+  pattern: "tile",
+  position: "diagonal",
+};
+
+async function getProtectedWatermarkConfig(): Promise<ProtectedWatermarkConfig> {
+  const [stored] = await db.select({ value: appSettingsTable.value }).from(appSettingsTable)
+    .where(eq(appSettingsTable.key, "protected_content_watermark"));
+  if (!stored) return DEFAULT_WATERMARK_CONFIG;
+  try {
+    const candidate = JSON.parse(stored.value) as Partial<ProtectedWatermarkConfig>;
+    return {
+      includeName: candidate.includeName !== false,
+      includeLearnerId: candidate.includeLearnerId !== false,
+      includeTimestamp: candidate.includeTimestamp !== false,
+      includeSessionId: candidate.includeSessionId === true,
+      confidentialityText: typeof candidate.confidentialityText === "string" && candidate.confidentialityText.trim()
+        ? candidate.confidentialityText.trim().slice(0, 120)
+        : DEFAULT_WATERMARK_CONFIG.confidentialityText,
+      pattern: candidate.pattern === "single" ? "single" : "tile",
+      position: candidate.position === "horizontal" ? "horizontal" : "diagonal",
+    };
+  } catch {
+    return DEFAULT_WATERMARK_CONFIG;
+  }
+}
+
+router.get("/protected-content/watermark", requireAdmin, async (_req, res) => {
+  res.json(await getProtectedWatermarkConfig());
+});
+
+router.put("/protected-content/watermark", requireAdmin, async (req, res) => {
+  const body = req.body as Partial<ProtectedWatermarkConfig>;
+  const config: ProtectedWatermarkConfig = {
+    includeName: body.includeName !== false,
+    includeLearnerId: body.includeLearnerId !== false,
+    includeTimestamp: body.includeTimestamp !== false,
+    includeSessionId: body.includeSessionId === true,
+    confidentialityText: typeof body.confidentialityText === "string" && body.confidentialityText.trim()
+      ? body.confidentialityText.trim().slice(0, 120)
+      : DEFAULT_WATERMARK_CONFIG.confidentialityText,
+    pattern: body.pattern === "single" ? "single" : "tile",
+    position: body.position === "horizontal" ? "horizontal" : "diagonal",
+  };
+  await db.insert(appSettingsTable).values({ key: "protected_content_watermark", value: JSON.stringify(config), updatedAt: new Date() })
+    .onConflictDoUpdate({ target: appSettingsTable.key, set: { value: JSON.stringify(config), updatedAt: new Date() } });
+  res.json(config);
+});
+
+/** Build server-baked watermark lines from the registered learner identity. */
+async function getWatermarkInfo(req: import("express").Request): Promise<{ line1: string; line2: string; options: ProtectedWatermarkConfig }> {
+  const config = await getProtectedWatermarkConfig();
   const ts = new Date().toLocaleString("en-GB", {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
-  const line2 = `CONFIDENTIAL · ${ts}`;
+  const line2Parts = [config.confidentialityText];
+  if (config.includeTimestamp) line2Parts.push(ts);
   if (req.session.isAdmin === true) {
     const name = process.env.ADMIN_USERNAME ?? "HIMT Admin";
-    return { line1: `Admin: ${name}`, line2 };
+    if (config.includeSessionId) line2Parts.push(`Session ${req.sessionID.slice(0, 12)}`);
+    return { line1: `Admin: ${name}`, line2: line2Parts.join(" · "), options: config };
   }
   const clerkUserId = getAuth(req).userId;
   if (clerkUserId) {
+    const learner = await resolveLearner(req);
     const u = await clerkClient.users.getUser(clerkUserId);
-    const email = u.primaryEmailAddress?.emailAddress ?? "unknown";
+    const email = learner?.email ?? u.primaryEmailAddress?.emailAddress ?? "unknown";
     const name = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
-    return { line1: name ? `${name} · ${email}` : email, line2 };
+    const line1Parts = [email];
+    if (config.includeName && name) line1Parts.unshift(name);
+    if (config.includeLearnerId && learner?.userId) line1Parts.push(`Learner ${learner.userId}`);
+    if (config.includeSessionId) line2Parts.push(`Session ${(getAuth(req).sessionId ?? req.sessionID).slice(0, 12)}`);
+    return { line1: line1Parts.join(" · "), line2: line2Parts.join(" · "), options: config };
   }
-  return { line1: "Unknown User", line2 };
+  return { line1: "Unknown User", line2: line2Parts.join(" · "), options: config };
 }
 
 /** Apply DRM response headers for page images. */
@@ -4182,10 +4560,8 @@ router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req
       const file = await getStoredResource(resource.storagePath);
       docStream = file.createReadStream() as unknown as Readable;
     } else if (resource.sourceUrl?.includes("view.publitas.com")) {
-      // Publitas is a web-hosted interactive publication — the viewer URL returns HTML,
-      // not a downloadable PDF. Signal the client to use the server-side iframe embed.
-      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: "doc_session:publitas" });
-      res.json({ pageCount: null, isPdf: false, externalViewer: "publitas" }); return;
+      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_denied", outcomeDetail: "external_document_not_renderable" });
+      res.status(409).json({ error: "This external publication must be migrated to private storage before it can be viewed." }); return;
     } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
       docStream = await fetchExternalDocumentStream(resource.sourceUrl);
     } else {
@@ -4238,13 +4614,14 @@ router.get("/curriculum/resources/:resourceId/admin-view/page/:pageNum", async (
     } else {
       res.status(404).json({ error: "Resource content not available" }); return;
     }
-    const { line1, line2 } = await getWatermarkInfo(req);
+    const { line1, line2, options } = await getWatermarkInfo(req);
     const png = await renderProtectedPage({
       pdfStream: docStream,
       pageNum, watermarkLine1: line1, watermarkLine2: line2,
       mimeType: resource.mimeType,
+      watermarkOptions: options,
     });
-    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: `page_render:${pageNum}` });
+    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: `page_render:${pageNum}`, pageNumber: pageNum, activityId: resource.sourceIdentity });
     setPageImageHeaders(res);
     res.end(png);
   } catch (error) {
@@ -4255,6 +4632,50 @@ router.get("/curriculum/resources/:resourceId/admin-view/page/:pageNum", async (
 });
 
 // ── Learner: page-count ───────────────────────────────────────────────────────
+
+/**
+ * HIMT-approved accessible protected-document mode. This returns extracted text,
+ * never the source file, and remains subject to the same short-lived, bound
+ * token and current enrollment checks as rendered page images.
+ */
+router.get("/curriculum/resources/:resourceId/open/accessible", async (req, res) => {
+  const resourceId = String(req.params.resourceId);
+  const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), resourceId, req);
+  if (!tokenResult.ok) { res.status(tokenResult.status).json({ error: tokenResult.error }); return; }
+  try {
+    const [resource] = await db.select().from(courseResourcesTable).where(eq(courseResourcesTable.id, resourceId));
+    if (!resource || resource.status !== "ready" || ["Video", "Recording"].includes(resource.resourceType)) {
+      res.status(404).json({ error: "Accessible document is not available" }); return;
+    }
+    if (!(await learnerCanAccessCourse(req, resource.courseId))) {
+      await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "accessible_not_enrolled_or_expired" });
+      res.status(403).json({ error: "Course access has expired or been revoked" }); return;
+    }
+    let docStream: Readable;
+    if (resource.storagePath) {
+      docStream = (await getStoredResource(resource.storagePath)).createReadStream() as unknown as Readable;
+    } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl) && !resource.sourceUrl.includes("view.publitas.com")) {
+      docStream = await fetchExternalDocumentStream(resource.sourceUrl);
+    } else {
+      res.status(404).json({ error: "Accessible text is unavailable for this publication" }); return;
+    }
+    const text = await getAccessibleTextFromStream(docStream, resource.mimeType);
+    await logContentAccess({
+      req, resourceId, courseId: resource.courseId, action: "view_success",
+      outcomeDetail: "accessible_text", activityId: resource.sourceIdentity,
+    });
+    setProtectedContentHeaders(res, "application/json; charset=utf-8");
+    res.json({
+      title: resource.title,
+      content: text,
+      notice: "Accessible protected text. Do not share this material. Browser and camera screenshots cannot be universally prevented.",
+    });
+  } catch (error) {
+    await logContentAccess({ req, resourceId, courseId: "unknown", action: "view_error", outcomeDetail: "accessible_text_failed" });
+    logger.error({ error }, "Accessible document extraction failed");
+    res.status(500).json({ error: "Could not prepare accessible document text" });
+  }
+});
 
 router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res) => {
   const fetchMode = req.headers["sec-fetch-mode"];
@@ -4300,10 +4721,8 @@ router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res)
       const file = await getStoredResource(resource.storagePath);
       docStream = file.createReadStream() as unknown as Readable;
     } else if (resource.sourceUrl?.includes("view.publitas.com")) {
-      // Publitas publications are web-hosted interactive content, not downloadable PDFs.
-      // Signal the client to use the server-side iframe embed path instead.
-      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: "doc_session:publitas" });
-      res.json({ pageCount: null, isPdf: false, externalViewer: "publitas" }); return;
+      await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_denied", outcomeDetail: "external_document_not_renderable" });
+      res.status(409).json({ error: "This external publication must be migrated to private storage before it can be viewed." }); return;
     } else if (resource.sourceUrl && !isTriByteUrl(resource.sourceUrl)) {
       docStream = await fetchExternalDocumentStream(resource.sourceUrl);
     } else {
@@ -4372,13 +4791,14 @@ router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, r
     } else {
       res.status(404).json({ error: "Resource content not available" }); return;
     }
-    const { line1, line2 } = await getWatermarkInfo(req);
+    const { line1, line2, options } = await getWatermarkInfo(req);
     const png = await renderProtectedPage({
       pdfStream: docStream,
       pageNum, watermarkLine1: line1, watermarkLine2: line2,
       mimeType: resource.mimeType,
+      watermarkOptions: options,
     });
-    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: `page_render:${pageNum}` });
+    await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: "view_success", outcomeDetail: `page_render:${pageNum}`, pageNumber: pageNum, activityId: resource.sourceIdentity });
     setPageImageHeaders(res);
     res.end(png);
   } catch (error) {

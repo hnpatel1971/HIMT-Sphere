@@ -1,4 +1,5 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import Hls from 'hls.js';
 
 // ─── Shared API helpers ───────────────────────────────────────────────────────
 const API = '/api';
@@ -278,6 +279,8 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
   const [pageImgUrl, setPageImgUrl]   = useState<string | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError,   setPageError]   = useState('');
+  const [accessibleText, setAccessibleText] = useState<string | null>(null);
+  const [accessibleError, setAccessibleError] = useState('');
   // DRM-003: separate one-time token for the Publitas iframe src (issued after page-count response)
   const [publitasToken, setPublitasToken] = useState<string | null>(null);
 
@@ -330,6 +333,14 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
   // 3. Revoke final blob URL on unmount
   useEffect(() => () => { setPageImgUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; }); }, []);
 
+  const openAccessibleMode = () => {
+    setAccessibleError('');
+    fetchWithContentToken(`${base}/accessible`, resource.id)
+      .then(r => r.json())
+      .then((data: { content?: string }) => setAccessibleText(data.content ?? 'No accessible text was available.'))
+      .catch(() => setAccessibleError('Accessible text could not be prepared for this document.'));
+  };
+
   if (isPdf === null) return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400">
       <RefreshCw size={28} className="animate-spin text-primary" />
@@ -368,6 +379,18 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
     );
   }
 
+  if (accessibleText !== null) {
+    return (
+      <div className="flex h-full flex-col bg-white text-slate-900">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <div><p className="text-sm font-semibold">Accessible protected text</p><p className="text-xs text-slate-500">Source download remains disabled.</p></div>
+          <button onClick={() => setAccessibleText(null)} className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold">Return to page view</button>
+        </div>
+        <article className="flex-1 overflow-auto whitespace-pre-wrap p-6 font-serif text-base leading-7" aria-label={`Accessible text for ${resource.title}`}>{accessibleText}</article>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col select-none">
       {/* Page image */}
@@ -394,9 +417,10 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
           />
         )}
       </div>
-      {/* Pagination controls — only shown when there are multiple pages */}
-      {pageCount !== null && pageCount > 1 && (
-        <div className="flex shrink-0 items-center justify-center gap-4 bg-gray-900 px-4 py-2">
+      <div className="flex shrink-0 items-center justify-center gap-4 bg-gray-900 px-4 py-2">
+        {resource.openUrl.endsWith('/open') && <button onClick={openAccessibleMode} className="rounded-lg px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700">Accessible text mode</button>}
+        {accessibleError && <span className="text-xs text-red-300">{accessibleError}</span>}
+        {pageCount !== null && pageCount > 1 && <>
           <button
             onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
             disabled={currentPage <= 1}
@@ -410,57 +434,95 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
             disabled={currentPage >= pageCount}
             className="rounded-lg px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
           >Next ›</button>
-        </div>
-      )}
+        </>}
+      </div>
     </div>
   );
 }
 
 function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource; onClose: () => void }) {
   const watermarkUrl = useWatermarkUrl();
-  // sourceUrl is only populated for Video resources (redacted for Documents server-side
-  // to prevent external document URL exposure — see DRM note in lms.ts activityFor/toActivity).
-  const src = resource.sourceUrl ?? '';
-  const ytId  = src ? getYouTubeId(src) : null;
-  const vimId = src ? getVimeoId(src) : null;
-
-  // Recording resources (stored MP4/audio) stream raw bytes like Video resources.
-  // All other non-media types (Document, Learning package, etc.) go through the
-  // page-image renderer (DocumentPageViewer). Publitas publications, detected via
-  // the page-count response, render as iframes within DocumentPageViewer — their
-  // URLs are never returned in client JSON, only resolved server-side on request.
   const MEDIA_TYPES = new Set(['Video', 'Recording']);
-  const isStoredDoc = !MEDIA_TYPES.has(resource.type ?? '') && !ytId && !vimId;
-  // Only fetch blob for media resources (the player needs a raw byte stream).
-  const needsBlob = !isStoredDoc && !ytId && !vimId;
-
-  const [blobUrl,    setBlobUrl]    = useState<string | null>(null);
+  const isVideo = MEDIA_TYPES.has(resource.type ?? '');
+  const isStoredDoc = !isVideo;
+  type PlaybackSession = { manifestUrl: string; expiresAt: string; positionSeconds: number; captions?: { url: string } | null; transcript?: string | null };
+  const [playback, setPlayback] = useState<PlaybackSession | null>(null);
   const [fetchState, setFetchState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [fetchErr,   setFetchErr]   = useState('');
+  const [playbackRate, setPlaybackRate] = useState('1');
+  const [showTranscript, setShowTranscript] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lastProgressAt = useRef(0);
 
   useEffect(() => {
-    if (!needsBlob) { setFetchState('ready'); return; }
+    if (!isVideo) { setFetchState('ready'); return; }
     let cancelled = false;
     setFetchState('loading');
     setFetchErr('');
-    setBlobUrl(null);
-    // DRM-003: fetch with a fresh one-time token in the Authorization header
-    fetchWithContentToken(resource.openUrl, resource.id)
+    setPlayback(null);
+    const endpoint = resource.openUrl.replace(/\/(?:open|admin-view)$/, '/playback-session');
+    issueContentToken(resource.id).then(token => fetch(endpoint, {
+      method: 'POST', credentials: 'include', headers: { Authorization: `Bearer ${token}` },
+    }))
       .then(async r => {
         if (!r.ok) throw new Error(`Server returned ${r.status}`);
-        const blob = await r.blob();
+        const session = await r.json() as PlaybackSession;
         if (cancelled) return;
-        setBlobUrl(URL.createObjectURL(blob));
+        setPlayback(session);
         setFetchState('ready');
       })
       .catch(e => {
         if (!cancelled) { setFetchErr(String(e)); setFetchState('error'); }
       });
-    return () => {
-      cancelled = true;
-      setBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
-    };
-  }, [resource.openUrl, resource.id, needsBlob]);
+    return () => { cancelled = true; };
+  }, [resource.openUrl, resource.id, isVideo]);
+
+  const reportProgress = (final = false) => {
+    const video = videoRef.current;
+    if (!video || !playback) return;
+    const now = Date.now();
+    if (!final && now - lastProgressAt.current < 5000) return;
+    lastProgressAt.current = now;
+    fetch(`${API}/curriculum/resources/${resource.id}/playback-progress`, {
+      method: 'PATCH', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: new URL(playback.manifestUrl, window.location.origin).searchParams.get('session'),
+        positionSeconds: video.currentTime,
+        durationSeconds: video.duration,
+        playbackRate: video.playbackRate,
+        captionsEnabled: false,
+      }),
+    }).catch(() => undefined);
+  };
+
+  // Safari plays HLS natively; hls.js supplies the same authenticated manifest,
+  // encrypted key, and segment flow for Chromium/Firefox browsers.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !playback) return;
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = playback.manifestUrl;
+      void video.play().catch(() => undefined);
+      return;
+    }
+    if (!Hls.isSupported()) {
+      setFetchErr('This browser cannot play protected adaptive video. Please use a current supported browser.');
+      setFetchState('error');
+      return;
+    }
+    const hls = new Hls({ xhrSetup: xhr => { xhr.withCredentials = true; } });
+    hls.loadSource(playback.manifestUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { void video.play().catch(() => undefined); });
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (data.fatal) {
+        setFetchErr('Protected playback session ended. Close and reopen the video to start a new session.');
+        setFetchState('error');
+      }
+    });
+    return () => hls.destroy();
+  }, [playback]);
 
   // ── DRM: block print / save shortcuts and blank the page on @media print ──
   useEffect(() => {
@@ -493,25 +555,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
   }, []);
 
   let viewer: ReactNode;
-  if (ytId) {
-    viewer = (
-      <iframe
-        src={`https://www.youtube.com/embed/${ytId}?autoplay=1&rel=0`}
-        allow="autoplay; fullscreen; picture-in-picture"
-        allowFullScreen
-        className="h-full w-full border-0"
-      />
-    );
-  } else if (vimId) {
-    viewer = (
-      <iframe
-        src={`https://player.vimeo.com/video/${vimId}?autoplay=1`}
-        allow="autoplay; fullscreen; picture-in-picture"
-        allowFullScreen
-        className="h-full w-full border-0"
-      />
-    );
-  } else if (isStoredDoc) {
+  if (isStoredDoc) {
     // Stored document (PDF or other): serve as page images with baked-in watermark.
     // The source file is never sent to the browser.
     viewer = <DocumentPageViewer resource={resource} />;
@@ -529,21 +573,36 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
         <span className="text-sm text-red-300">{fetchErr || 'Could not load resource'}</span>
       </div>
     );
-  } else if (blobUrl && (resource.type === 'Video' || resource.type === 'Recording')) {
+  } else if (playback) {
     viewer = (
-      <video
-        controls
-        autoPlay
-        controlsList="nodownload nofullscreen"
-        disablePictureInPicture
-        onContextMenu={e => e.preventDefault()}
-        className="h-full w-full bg-black"
-        src={blobUrl}
-      />
+      <div className="flex h-full flex-col bg-black">
+        <video
+          ref={videoRef}
+          controls
+          autoPlay
+          controlsList="nodownload nofullscreen"
+          disablePictureInPicture
+          onContextMenu={e => e.preventDefault()}
+          onLoadedMetadata={e => { e.currentTarget.currentTime = playback.positionSeconds; }}
+          onTimeUpdate={() => reportProgress()}
+          onEnded={() => reportProgress(true)}
+          onRateChange={e => setPlaybackRate(String(e.currentTarget.playbackRate))}
+          className="min-h-0 flex-1 w-full bg-black"
+        >{playback.captions?.url && <track kind="captions" src={playback.captions.url} srcLang="en" label="English" default />}</video>
+        <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-300">
+          <label htmlFor="protected-speed">Playback speed</label>
+          <select id="protected-speed" value={playbackRate} onChange={e => {
+            setPlaybackRate(e.target.value);
+            if (videoRef.current) videoRef.current.playbackRate = Number(e.target.value);
+          }} className="rounded border border-gray-600 bg-gray-800 px-2 py-1 text-white">
+            <option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+          </select>
+          {playback.transcript && <button onClick={() => setShowTranscript(v => !v)} className="rounded border border-gray-600 px-2 py-1 hover:bg-gray-700">{showTranscript ? 'Hide transcript' : 'Transcript'}</button>}
+          <span className="ml-auto text-gray-500">Progress is saved automatically.</span>
+        </div>
+        {showTranscript && playback.transcript && <article className="max-h-40 overflow-auto border-t border-gray-800 bg-gray-950 px-4 py-3 text-sm leading-6 text-gray-200">{playback.transcript}</article>}
+      </div>
     );
-  } else if (blobUrl) {
-    // Fallback blob viewer for external-URL resources (server redirected to sourceUrl)
-    viewer = <iframe src={blobUrl} className="h-full w-full border-0 bg-white" tabIndex={-1} />;
   } else {
     viewer = null;
   }
@@ -569,6 +628,9 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
           <X size={18} />
         </button>
       </div>
+      <p className="shrink-0 bg-gray-950 px-4 py-1.5 text-center text-[11px] text-gray-400">
+        Protected learning material: download and print are disabled. Browser tools and external cameras cannot be made universally screenshot-proof.
+      </p>
       {/* Viewer */}
       <div className="relative min-h-0 flex-1">
         {viewer}
@@ -918,10 +980,9 @@ function ActivityRow({ activity, onOpenDocument }: { activity: ActivityType; onO
   const isAvailable = Boolean(activity.openUrl);
   const handleClick = () => {
     if (!activity.openUrl) return;
-    // Non-video resources → open in the DRM page-image viewer modal so the source file
-    // never reaches the browser. Videos and unrecognised types open in a new tab.
-    const isVideo = activity.type === 'Video';
-    if (!isVideo && onOpenDocument) {
+    // All protected resources—including recordings—open inside the LMS viewer.
+    // No source URL is opened in a new tab.
+    if (onOpenDocument) {
       const a = activity as ActivityType & { sourceUrl?: string | null; mimeType?: string | null; hasStoredFile?: boolean };
       onOpenDocument({ id: activity.id, title: activity.title, type: activity.type ?? '', openUrl: activity.openUrl, sourceUrl: a.sourceUrl ?? null, mimeType: a.mimeType ?? null, hasStoredFile: a.hasStoredFile ?? true });
     } else {

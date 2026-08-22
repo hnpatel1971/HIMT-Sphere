@@ -7,5 +7,4 @@
 - [TriByte resource migration coverage](tribyte-resource-migration-coverage.md) — scan the full hierarchy; Preview links are source hints, not resources without record-level evidence.
 - [TriByte sub-topic order sync](tribyte-subtopic-order-sync.md) — use each topic page’s sub-topic sequence; repair only legacy all-zero ordering.
 - [TriByte shared-category identities](tribyte-shared-category-identities.md) — course-scoped keys are required because a source category can serve more than one course record.
-- [Document DRM page-image rendering](pdf-page-rendering.md) — security decisions: streaming blocked for non-media, Publitas via server-redirect iframe, LibreOffice/Poppler declared as Nix deps (never hard-code store paths).
-- [PDF page rendering & DRM security](pdf-page-rendering.md) — raw doc streaming blocked for non-Video; admin-view routes require admin session; LibreOffice converts non-PDF formats.
+- [Document DRM page-image rendering](pdf-page-rendering.md) — documents are rendered server-side; external interactive publications stay unavailable until privately migrated.
