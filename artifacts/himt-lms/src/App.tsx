@@ -3,6 +3,17 @@ import MuxPlayer, { type MuxPlayerRefAttributes } from '@mux/mux-player-react';
 
 // ─── Shared API helpers ───────────────────────────────────────────────────────
 const API = '/api';
+
+class ProtectedContentError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ProtectedContentError';
+  }
+}
+
 async function apiFetch<T = unknown>(path: string, method = 'GET', body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
   const r = await fetch(`${API}${path}`, {
     method,
@@ -15,10 +26,18 @@ async function apiFetch<T = unknown>(path: string, method = 'GET', body?: unknow
 // ── DRM-003: per-request content token helpers ────────────────────────────────
 /** Issue a one-time 60 s content token for the given resource from the server. */
 async function issueContentToken(resourceId: string): Promise<string> {
-  const result = await apiFetch<{ token: string }>(
-    `/curriculum/resources/${resourceId}/token`, 'POST',
-  );
-  return result.token;
+  const response = await fetch(`${API}/curriculum/resources/${resourceId}/token`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  const body = await response.json().catch(() => null) as { token?: string; error?: string } | null;
+  if (!response.ok || !body?.token) {
+    throw new ProtectedContentError(
+      response.status,
+      body?.error || `Could not request protected content access (${response.status})`,
+    );
+  }
+  return body.token;
 }
 /**
  * Fetch a DRM-protected endpoint with a fresh one-time token in the Authorization header.
@@ -273,6 +292,7 @@ function useWatermarkUrl(): string {
 function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [isPdf,     setIsPdf]     = useState<boolean | null>(null);
+  const [accessError, setAccessError] = useState<ProtectedContentError | null>(null);
   // externalViewer: 'publitas' → show iframe via server-side redirect (URL never in client JS)
   const [externalViewer, setExternalViewer] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -289,15 +309,26 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
   // 1. Fetch page count — DRM-003: fresh one-time token per request
   useEffect(() => {
     let cancelled = false;
+    setAccessError(null);
     fetchWithContentToken(`${base}/page-count`, resource.id)
-      .then(r => r.json())
+      .then(async r => {
+        const data = await r.json().catch(() => null) as { pageCount?: number | null; isPdf?: boolean; externalViewer?: string; error?: string } | null;
+        if (!r.ok) throw new ProtectedContentError(r.status, data?.error || `Could not prepare this document (${r.status})`);
+        return data;
+      })
       .then((d: { pageCount: number | null; isPdf: boolean; externalViewer?: string }) => {
         if (cancelled) return;
         setIsPdf(d.isPdf);
         setPageCount(d.pageCount);
         setExternalViewer(d.externalViewer ?? null);
       })
-      .catch(() => { if (!cancelled) setIsPdf(false); });
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setAccessError(error instanceof ProtectedContentError
+          ? error
+          : new ProtectedContentError(0, 'Could not establish a protected document session.'));
+        setIsPdf(false);
+      });
     return () => { cancelled = true; };
   }, [base, resource.id]);
 
@@ -349,6 +380,22 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
   );
 
   if (isPdf === false) {
+    if (accessError) {
+      const accessMessage = accessError.status === 401
+        ? 'Sign in with your administrator account or enrolled learner account to open this protected document.'
+        : accessError.status === 403
+          ? 'Your current account does not have access to this course material. Contact an administrator if you need enrollment.'
+          : 'The protected document session could not be established. Please try again.';
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-gray-400">
+          <LockKeyhole size={28} className="text-amber-400" />
+          <span data-testid="text-document-access-error" className="text-sm font-medium text-gray-200">
+            {accessError.status === 401 ? 'Sign-in required to preview this document.' : 'Document access is not available for this account.'}
+          </span>
+          <span className="max-w-md text-xs leading-relaxed text-gray-400">{accessMessage}</span>
+        </div>
+      );
+    }
     // Publitas web publication: embed via the server-side redirect endpoint.
     // The Publitas URL is never exposed in client-side JavaScript — the browser
     // follows a 302 from /open or /admin-view with only enrollment-gated access.
