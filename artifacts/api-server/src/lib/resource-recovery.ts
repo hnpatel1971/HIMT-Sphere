@@ -9,6 +9,16 @@ type StoredResourceFile = {
 
 type StoredResourceLookup = (objectPath: string) => Promise<StoredResourceFile>;
 
+export type StoredResourceRegistration = {
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string | null;
+  recoveryMethod: string;
+};
+
+type RegisterStoredResource = (registration: StoredResourceRegistration) => Promise<void>;
+
 export async function inspectStoredResource(
   objectPath: string,
   getStoredResource: StoredResourceLookup,
@@ -25,4 +35,32 @@ export async function inspectStoredResource(
   } catch {
     return null;
   }
+}
+
+/**
+ * Complete the database side of an upload that finished before its resource
+ * row was persisted. The caller supplies the row update so this recovery
+ * logic stays independent of the database implementation.
+ */
+export async function resumeStoredResourceImport(
+  objectPath: string,
+  options: {
+    mimeType: string;
+    existingChecksum?: string | null;
+    existingRecoveryMethod?: string | null;
+    getStoredResource: StoredResourceLookup;
+    registerStoredResource: RegisterStoredResource;
+  },
+): Promise<boolean> {
+  const stored = await inspectStoredResource(objectPath, options.getStoredResource);
+  if (!stored) return false;
+
+  await options.registerStoredResource({
+    storagePath: objectPath,
+    mimeType: options.mimeType || stored.contentType,
+    sizeBytes: stored.sizeBytes,
+    checksum: options.existingChecksum ?? null,
+    recoveryMethod: options.existingRecoveryMethod ?? "storage_resume",
+  });
+  return true;
 }

@@ -28,7 +28,7 @@ import {
   resourceObjectPath,
   storeResourceStream,
 } from "../lib/resource-storage";
-import { inspectStoredResource } from "../lib/resource-recovery";
+import { inspectStoredResource, resumeStoredResourceImport } from "../lib/resource-recovery";
 import { renderProtectedPage, getPageCountFromStream } from "../lib/pdf-renderer";
 import {
   courses as coursesTable,
@@ -3325,19 +3325,25 @@ async function migrateTriByteResource(
   // A previous transfer can complete while its follow-up database write fails
   // (for example, after an interrupted process). Reuse that private object
   // instead of downloading a potentially multi-gigabyte recording again.
-  const stored = await inspectStoredResource(objectPath, getStoredResource);
-  if (stored) {
-    const mimeType = resourceMimeFromName(resource.fileName, stored.contentType);
-    await db.update(courseResourcesTable).set({
-      status: "ready",
-      storagePath: objectPath,
-      mimeType,
-      sizeBytes: stored.sizeBytes,
-      checksum: existing?.checksum ?? null,
-      recoveryMethod: existing?.recoveryMethod ?? "storage_resume",
-      error: null,
-      updatedAt: new Date(),
-    }).where(eq(courseResourcesTable.id, id));
+  const storedResourceResumed = await resumeStoredResourceImport(objectPath, {
+    mimeType: resourceMimeFromName(resource.fileName, ""),
+    existingChecksum: existing?.checksum,
+    existingRecoveryMethod: existing?.recoveryMethod,
+    getStoredResource,
+    registerStoredResource: async ({ storagePath, mimeType, sizeBytes, checksum, recoveryMethod }) => {
+      await db.update(courseResourcesTable).set({
+        status: "ready",
+        storagePath,
+        mimeType,
+        sizeBytes,
+        checksum,
+        recoveryMethod,
+        error: null,
+        updatedAt: new Date(),
+      }).where(eq(courseResourcesTable.id, id));
+    },
+  });
+  if (storedResourceResumed) {
     return "imported";
   }
 
