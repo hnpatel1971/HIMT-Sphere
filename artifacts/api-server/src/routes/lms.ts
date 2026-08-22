@@ -4653,6 +4653,29 @@ function setPageImageHeaders(res: import("express").Response): void {
   res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
 }
 
+// Protected document delivery only needs these stable resource fields. Keeping
+// this read explicit also lets document delivery remain available while a
+// deployment is waiting for additive, video-only schema columns to arrive.
+const protectedDocumentResourceSelection = {
+  id: courseResourcesTable.id,
+  courseId: courseResourcesTable.courseId,
+  sourceIdentity: courseResourcesTable.sourceIdentity,
+  sourceUrl: courseResourcesTable.sourceUrl,
+  title: courseResourcesTable.title,
+  resourceType: courseResourcesTable.resourceType,
+  mimeType: courseResourcesTable.mimeType,
+  status: courseResourcesTable.status,
+  storagePath: courseResourcesTable.storagePath,
+};
+
+async function findProtectedDocumentResource(resourceId: string) {
+  const [resource] = await db
+    .select(protectedDocumentResourceSelection)
+    .from(courseResourcesTable)
+    .where(eq(courseResourcesTable.id, resourceId));
+  return resource;
+}
+
 // ── Admin: page-count ─────────────────────────────────────────────────────────
 
 router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req, res) => {
@@ -4674,8 +4697,7 @@ router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req
     }
   }
   try {
-    const [resource] = await db.select().from(courseResourcesTable)
-      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    const resource = await findProtectedDocumentResource(req.params.resourceId);
     if (!resource) { res.status(404).json({ error: "Resource not found" }); return; }
     let docStream: Readable;
     if (resource.storagePath) {
@@ -4724,8 +4746,7 @@ router.get("/curriculum/resources/:resourceId/admin-view/page/:pageNum", async (
     }
   }
   try {
-    const [resource] = await db.select().from(courseResourcesTable)
-      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    const resource = await findProtectedDocumentResource(req.params.resourceId);
     if (!resource) { res.status(404).json({ error: "Resource not available" }); return; }
     let docStream: Readable;
     if (resource.storagePath) {
@@ -4765,7 +4786,7 @@ router.get("/curriculum/resources/:resourceId/open/accessible", async (req, res)
   const tokenResult = await verifyAndConsumeToken(extractBearerToken(req), resourceId, req);
   if (!tokenResult.ok) { res.status(tokenResult.status).json({ error: tokenResult.error }); return; }
   try {
-    const [resource] = await db.select().from(courseResourcesTable).where(eq(courseResourcesTable.id, resourceId));
+    const resource = await findProtectedDocumentResource(resourceId);
     if (!resource || resource.status !== "ready" || ["Video", "Recording"].includes(resource.resourceType)) {
       res.status(404).json({ error: "Accessible document is not available" }); return;
     }
@@ -4813,8 +4834,7 @@ router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res)
     }
   }
   try {
-    const [resource] = await db.select().from(courseResourcesTable)
-      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    const resource = await findProtectedDocumentResource(req.params.resourceId);
     if (!resource || resource.status !== "ready") { res.status(404).json({ error: "Resource not available" }); return; }
     if (!(await learnerCanAccessCourse(req, resource.courseId))) {
       const signedIn = Boolean(getAuth(req).userId);
@@ -4879,8 +4899,7 @@ router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, r
     }
   }
   try {
-    const [resource] = await db.select().from(courseResourcesTable)
-      .where(eq(courseResourcesTable.id, req.params.resourceId));
+    const resource = await findProtectedDocumentResource(req.params.resourceId);
     if (!resource || resource.status !== "ready") { res.status(404).json({ error: "Resource not available" }); return; }
     if (!(await learnerCanAccessCourse(req, resource.courseId))) {
       const signedIn = Boolean(getAuth(req).userId);

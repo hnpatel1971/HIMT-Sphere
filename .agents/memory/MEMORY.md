@@ -8,3 +8,4 @@
 - [TriByte sub-topic order sync](tribyte-subtopic-order-sync.md) — use each topic page’s sub-topic sequence; repair only legacy all-zero ordering.
 - [TriByte shared-category identities](tribyte-shared-category-identities.md) — course-scoped keys are required because a source category can serve more than one course record.
 - [Document DRM page-image rendering](pdf-page-rendering.md) — documents are rendered server-side; external interactive publications stay unavailable until privately migrated.
+- [Protected document schema compatibility](protected-document-schema-compatibility.md) — document delivery projects stable fields so lagging video schema columns cannot block protected PDFs.
