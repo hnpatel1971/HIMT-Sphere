@@ -229,11 +229,13 @@ async function applyWatermark(png: Buffer, line1: string, line2: string, options
       const cy = row * tH + tH / 2;
       tiles += `<g transform="translate(${cx},${cy}) rotate(${angle})">
         <text y="-8" text-anchor="middle"
-          font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="bold"
-          fill="rgba(50,50,50,0.22)">${escapeXml(line1)}</text>
+          font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="bold"
+          fill="rgba(255,255,255,0.82)" stroke="rgba(20,20,20,0.62)" stroke-width="2"
+          paint-order="stroke fill" stroke-linejoin="round">${escapeXml(line1)}</text>
         <text y="10" text-anchor="middle"
-          font-family="Helvetica,Arial,sans-serif" font-size="10"
-          fill="rgba(50,50,50,0.16)">${escapeXml(line2)}</text>
+          font-family="Helvetica,Arial,sans-serif" font-size="11"
+          fill="rgba(255,255,255,0.72)" stroke="rgba(20,20,20,0.55)" stroke-width="1.75"
+          paint-order="stroke fill" stroke-linejoin="round">${escapeXml(line2)}</text>
       </g>`;
     }
   }
