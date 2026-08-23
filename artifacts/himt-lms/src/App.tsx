@@ -1079,6 +1079,7 @@ type DirectoryUser = {
   name: string;
   email: string;
   role: string;
+  groupId: string | null;
   group: string;
   status: string;
   lastActivity: string;
@@ -1143,7 +1144,7 @@ function UserFormModal({ user, groups, onClose, onSaved }: { user?: DirectoryUse
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   const [role, setRole] = useState(user?.role || 'Learner');
-  const [group, setGroup] = useState(user?.group || (groups[0]?.name || ''));
+  const [groupId, setGroupId] = useState(user?.groupId || groups.find(g => g.name === user?.group)?.id || groups[0]?.id || '');
   const [status, setStatus] = useState(user?.status || 'Active');
   const [busy, setBusy] = useState(false);
   const [inviting, setInviting] = useState(false);
@@ -1156,10 +1157,10 @@ function UserFormModal({ user, groups, onClose, onSaved }: { user?: DirectoryUse
     setBusy(true);
     try {
       if (isEdit) {
-        await apiFetch(`/users/${user.id}`, 'PATCH', { name, role, group, status });
+        await apiFetch(`/users/${user.id}`, 'PATCH', { name, role, groupId, status });
         toast({ title: 'User updated' });
       } else {
-        const created = await apiFetch<{ invitationSent: boolean; accountExists: boolean }>('/users', 'POST', { name, email, role, group });
+        const created = await apiFetch<{ invitationSent: boolean; accountExists: boolean }>('/users', 'POST', { name, email, role, groupId });
         toast({
           title: created.invitationSent ? 'Invitation sent' : created.accountExists ? 'User linked' : 'Invitation already pending',
           description: created.invitationSent
@@ -1215,8 +1216,8 @@ function UserFormModal({ user, groups, onClose, onSaved }: { user?: DirectoryUse
             </select>
           </Field>
           <Field label="Group">
-            <select className="form-input" value={group} onChange={e => setGroup(e.target.value)}>
-              {groups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+            <select className="form-input" value={groupId} onChange={e => setGroupId(e.target.value)}>
+              {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
               {groups.length === 0 && <option value="">No groups</option>}
             </select>
           </Field>

@@ -502,6 +502,33 @@ export async function ensureAppSettingsTable() {
  * Drizzle schema push before directory imports and enrollments are available.
  */
 export async function ensureUserWorkspaceTables() {
+  // Keep existing LMS installations compatible with durable group memberships.
+  // This must run before any directory/group query can select users.group_id.
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS group_id TEXT
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint constraint_row
+        JOIN pg_attribute attribute_row
+          ON attribute_row.attrelid = constraint_row.conrelid
+         AND attribute_row.attnum = ANY(constraint_row.conkey)
+        WHERE constraint_row.contype = 'f'
+          AND constraint_row.conrelid = 'users'::regclass
+          AND constraint_row.confrelid = 'groups'::regclass
+          AND attribute_row.attname = 'group_id'
+      ) THEN
+        ALTER TABLE users
+          ADD CONSTRAINT users_group_id_groups_id_fk
+          FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL;
+      END IF;
+    END
+    $$;
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_course_enrollments (
       id         TEXT PRIMARY KEY,
@@ -716,6 +743,7 @@ function decryptSetting(stored: string): string {
 
 // Fire-and-forget seed on startup (non-critical; logged on failure)
 seedDatabase()
+  .then(() => reconcileLegacyGroupMemberships())
   .then(() => provisionExistingMuxVideos())
   .catch(err => console.error("[seed] Failed:", err));
 syncTriByteCourses().catch(err => console.error("[sync] Failed:", err));
@@ -1014,6 +1042,59 @@ type ImportedDirectoryUser = {
   lastActivity?: string;
 };
 
+type GroupStore = Pick<typeof db, "insert" | "select">;
+
+async function findOrCreateGroup(
+  store: GroupStore,
+  rawGroupName: string,
+  idPrefix = "g-import",
+) {
+  const name = rawGroupName.trim();
+  if (!name) return null;
+
+  const findExisting = () => store
+    .select({ id: groupsTable.id, name: groupsTable.name })
+    .from(groupsTable)
+    .where(sql`lower(${groupsTable.name}) = lower(${name})`)
+    .limit(1);
+
+  const [existing] = await findExisting();
+  if (existing) return existing;
+
+  const [inserted] = await store.insert(groupsTable)
+    .values({ id: `${idPrefix}-${randomUUID()}`, name })
+    .onConflictDoNothing()
+    .returning({ id: groupsTable.id, name: groupsTable.name });
+  if (inserted) return inserted;
+
+  const [concurrentGroup] = await findExisting();
+  return concurrentGroup ?? null;
+}
+
+/**
+ * Imports created before users.groupId existed only have a display label.
+ * Turn each label into a durable group relationship before counting it.
+ */
+async function reconcileLegacyGroupMemberships() {
+  await db.transaction(async (tx) => {
+    const legacyUsers = await tx
+      .select({
+        id: usersTable.id,
+        groupName: usersTable.groupName,
+      })
+      .from(usersTable)
+      .where(isNull(usersTable.groupId));
+
+    for (const user of legacyUsers) {
+      const group = await findOrCreateGroup(tx, user.groupName ?? "", "g-legacy");
+      if (!group) continue;
+      await tx.update(usersTable)
+        .set({ groupId: group.id, groupName: group.name })
+        .where(eq(usersTable.id, user.id));
+    }
+  });
+}
+
 async function persistDirectoryImport(options: {
   source: "csv" | "tribyte";
   filename: string;
@@ -1024,24 +1105,37 @@ async function persistDirectoryImport(options: {
   const importId = `import-${randomUUID()}`;
   let added = 0, updated = 0, groupsImported = 0;
   await db.transaction(async (tx) => {
-    for (const groupName of [...new Set(options.groupNames.map((name) => name.trim()).filter(Boolean))]) {
-      const inserted = await tx.insert(groupsTable)
-        .values({ id: `g-import-${randomUUID()}`, name: groupName })
-        .onConflictDoNothing()
-        .returning({ id: groupsTable.id });
-      if (inserted.length) groupsImported++;
+    const groupsByName = new Map<string, { id: string; name: string }>();
+    const importedGroupNames = new Set([
+      ...options.groupNames,
+      ...options.users.map((user) => user.groupName),
+    ].map((name) => name.trim()).filter(Boolean));
+
+    for (const groupName of importedGroupNames) {
+      const [existing] = await tx
+        .select({ id: groupsTable.id })
+        .from(groupsTable)
+        .where(sql`lower(${groupsTable.name}) = lower(${groupName})`)
+        .limit(1);
+      const group = await findOrCreateGroup(tx, groupName);
+      if (!group) continue;
+      groupsByName.set(group.name.toLowerCase(), group);
+      if (!existing) groupsImported++;
     }
+
     for (const input of options.users) {
       const email = input.email.trim().toLowerCase();
       const [existing] = await tx.select().from(usersTable).where(ilike(usersTable.email, email));
       const nextStatus = input.status === "Suspended"
         ? "Suspended"
         : existing?.status ?? "Pending";
+      const group = groupsByName.get(input.groupName.trim().toLowerCase());
       const values = {
         name: input.name,
         email,
         role: canonicalRole(input.role),
-        groupName: input.groupName,
+        groupId: group?.id ?? null,
+        groupName: group?.name ?? "",
         status: nextStatus,
         lastActivity: input.lastActivity ?? existing?.lastActivity ?? "Never",
       };
@@ -1108,9 +1202,12 @@ router.patch("/users/:userId", requireAdmin, async (req, res) => {
       if (!USER_STATUSES.has(body.status)) { res.status(400).json({ error: "Invalid user status" }); return; }
       updates.status = body.status;
     }
-    if (typeof body.group === "string") {
-      const [group] = await db.select().from(groupsTable).where(eq(groupsTable.name, body.group));
+    if (typeof body.groupId === "string" || typeof body.group === "string") {
+      const [group] = typeof body.groupId === "string"
+        ? await db.select().from(groupsTable).where(eq(groupsTable.id, body.groupId))
+        : await db.select().from(groupsTable).where(sql`lower(${groupsTable.name}) = lower(${body.group as string})`);
       if (!group) { res.status(404).json({ error: "Group not found" }); return; }
+      updates.groupId = group.id;
       updates.groupName = group.name;
     }
     if (!Object.keys(updates).length) {
@@ -1134,12 +1231,16 @@ router.post("/users", requireAdmin, async (req, res) => {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const role = canonicalRole(body.role || "student");
   const groupName = typeof body.group === "string" ? body.group.trim() : "";
+  const groupId = typeof body.groupId === "string" ? body.groupId : "";
   if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !USER_ROLES.has(role)) {
     res.status(400).json({ error: "Name, a valid email, and a valid role are required" }); return;
   }
   try {
-    if (groupName) {
-      const [group] = await db.select().from(groupsTable).where(eq(groupsTable.name, groupName));
+    let group: { id: string; name: string } | undefined;
+    if (groupId || groupName) {
+      [group] = groupId
+        ? await db.select({ id: groupsTable.id, name: groupsTable.name }).from(groupsTable).where(eq(groupsTable.id, groupId))
+        : await db.select({ id: groupsTable.id, name: groupsTable.name }).from(groupsTable).where(sql`lower(${groupsTable.name}) = lower(${groupName})`);
       if (!group) { res.status(404).json({ error: "Group not found" }); return; }
     }
     const [existing] = await db.select().from(usersTable).where(ilike(usersTable.email, email));
@@ -1154,7 +1255,7 @@ router.post("/users", requireAdmin, async (req, res) => {
       return;
     }
     const [user] = await db.insert(usersTable).values({
-      id, name, email, role, groupName, status: clerkResult.status, lastActivity: "Never",
+      id, name, email, role, groupId: group?.id ?? null, groupName: group?.name ?? "", status: clerkResult.status, lastActivity: "Never",
     }).returning();
     res.status(201).json({ ...userResponse(user), ...clerkResult });
   } catch (error) { res.status(500).json({ error: String(error) }); }
@@ -1361,7 +1462,13 @@ router.get("/curriculum/groups", async (_req, res) => {
         learnerCount: sql<number>`count(*) FILTER (WHERE ${usersTable.role} = 'student')::int`,
       })
       .from(groupsTable)
-      .leftJoin(usersTable, eq(usersTable.groupName, groupsTable.name))
+      .leftJoin(usersTable, or(
+        eq(usersTable.groupId, groupsTable.id),
+        and(
+          isNull(usersTable.groupId),
+          sql`lower(${usersTable.groupName}) = lower(${groupsTable.name})`,
+        ),
+      ))
       .groupBy(groupsTable.id, groupsTable.name, groupsTable.parentId, groupsTable.createdAt)
       .orderBy(groupsTable.name);
     res.json(rows);
@@ -1381,7 +1488,26 @@ router.post("/curriculum/groups", requireFacultyOrAdmin, async (req, res) => {
 
 router.delete("/curriculum/groups/:id", requireFacultyOrAdmin, async (req, res) => {
   try {
-    await db.delete(groupsTable).where(eq(groupsTable.id, String(req.params.id)));
+    const groupId = String(req.params.id);
+    await db.transaction(async (tx) => {
+      const [group] = await tx
+        .select({ id: groupsTable.id, name: groupsTable.name })
+        .from(groupsTable)
+        .where(eq(groupsTable.id, groupId))
+        .limit(1);
+      if (!group) return;
+
+      await tx.update(usersTable)
+        .set({ groupId: null, groupName: "" })
+        .where(or(
+          eq(usersTable.groupId, groupId),
+          and(
+            isNull(usersTable.groupId),
+            sql`lower(${usersTable.groupName}) = lower(${group.name})`,
+          ),
+        ));
+      await tx.delete(groupsTable).where(eq(groupsTable.id, groupId));
+    });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });

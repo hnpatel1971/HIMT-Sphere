@@ -97,6 +97,7 @@ test("admin user workspace is authorized, persistent, and duplicate-safe", async
   const group = `Workspace test ${suffix}`;
   const filename = `workspace-${suffix}.csv`;
   let importedUserId: string | null = null;
+  let legacyUserId: string | null = null;
   let temporaryGroupId: string | null = null;
 
   try {
@@ -164,28 +165,97 @@ test("admin user workspace is authorized, persistent, and duplicate-safe", async
       { headers: { Cookie: sessionCookie } },
     );
     assert.equal(filteredDirectory.status, 200);
-    const matches = await filteredDirectory.json() as Array<{ id: string; name: string; email: string; role: string; group: string; status: string }>;
+    const matches = await filteredDirectory.json() as Array<{ id: string; name: string; email: string; role: string; groupId: string | null; group: string; status: string }>;
     assert.equal(matches.length, 1, "case-insensitive re-import must update rather than duplicate");
     assert.equal(matches[0].name, "Workspace Learner");
+    assert.ok(matches[0].groupId, "an imported membership should reference its durable group");
     importedUserId = matches[0].id;
+
+    const groupsAfterImport = await fetch(`${baseUrl}/curriculum/groups`);
+    assert.equal(groupsAfterImport.status, 200);
+    const importedGroups = await groupsAfterImport.json() as Array<{ id: string; name: string; learnerCount: number }>;
+    const importedGroup = importedGroups.find((row) => row.name === group);
+    const allContent = importedGroups.find((row) => row.name === "All Content");
+    assert.ok(importedGroup, "import should create a matching group record");
+    assert.equal(importedGroup.learnerCount, 1, "the imported learner should count against its imported group");
+    assert.ok(allContent, "seeded groups without imported learners should remain available");
+    const allContentLearnersBeforeMove = allContent.learnerCount;
+
+    legacyUserId = `u-legacy-${randomUUID()}`;
+    const legacyEmail = `legacy-${suffix}@example.invalid`;
+    const createLegacyUser = spawnSync(
+      "psql",
+      [process.env.DATABASE_URL ?? ""],
+      {
+        input: `INSERT INTO users (id, name, email, role, group_name, status, last_activity) VALUES ('${legacyUserId}', 'Legacy Learner', '${legacyEmail}', 'student', '${group}', 'Active', 'Never');`,
+        encoding: "utf8",
+      },
+    );
+    assert.equal(createLegacyUser.status, 0, createLegacyUser.stderr);
+
+    const deletedImportedGroup = await fetch(`${baseUrl}/curriculum/groups/${importedGroup.id}`, {
+      method: "DELETE",
+      headers: { Cookie: sessionCookie },
+    });
+    assert.equal(deletedImportedGroup.status, 200);
+    const recreatedGroupResponse = await fetch(`${baseUrl}/curriculum/groups`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+      body: JSON.stringify({ name: group.toLowerCase() }),
+    });
+    assert.equal(recreatedGroupResponse.status, 201);
+    const recreatedGroup = await recreatedGroupResponse.json() as { id: string; name: string };
+    temporaryGroupId = recreatedGroup.id;
+
+    const groupsAfterRecreate = await fetch(`${baseUrl}/curriculum/groups`);
+    assert.equal(groupsAfterRecreate.status, 200);
+    const recreatedGroups = await groupsAfterRecreate.json() as Array<{ id: string; name: string; learnerCount: number }>;
+    assert.equal(
+      recreatedGroups.find((row) => row.id === recreatedGroup.id)?.learnerCount,
+      0,
+      "deleting and recreating a group must not reassign its former learners by name",
+    );
+    const legacyDirectory = await fetch(`${baseUrl}/users?search=${encodeURIComponent(legacyEmail)}`, {
+      headers: { Cookie: sessionCookie },
+    });
+    assert.equal(legacyDirectory.status, 200);
+    assert.deepEqual(
+      (await legacyDirectory.json() as Array<{ groupId: string | null; group: string }>).map(({ groupId, group: groupName }) => ({ groupId, groupName })),
+      [{ groupId: null, groupName: "" }],
+      "deleting a group must clear legacy name-only memberships as well",
+    );
 
     const updated = await fetch(`${baseUrl}/users/${importedUserId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Cookie: sessionCookie },
-      body: JSON.stringify({ name: "Workspace Faculty Updated", role: "Faculty", status: "Active", group }),
+      body: JSON.stringify({ name: "Workspace Learner Updated", role: "Learner", status: "Active", groupId: allContent.id }),
     });
     assert.equal(updated.status, 200);
     assert.deepEqual(
       (({ name, role, status, group: groupName }) => ({ name, role, status, group: groupName }))(await updated.json()),
-      { name: "Workspace Faculty Updated", role: "Faculty", status: "Active", group },
+      { name: "Workspace Learner Updated", role: "Learner", status: "Active", group: "All Content" },
     );
 
     const reread = await fetch(`${baseUrl}/users?search=${encodeURIComponent(email)}`, { headers: { Cookie: sessionCookie } });
     assert.equal(reread.status, 200);
     const persisted = await reread.json() as Array<{ id: string; role: string; status: string }>;
     assert.equal(persisted.length, 1);
-    assert.equal(persisted[0].role, "Faculty");
+    assert.equal(persisted[0].role, "Learner");
     assert.equal(persisted[0].status, "Active");
+
+    const groupsAfterMove = await fetch(`${baseUrl}/curriculum/groups`);
+    assert.equal(groupsAfterMove.status, 200);
+    const movedGroups = await groupsAfterMove.json() as Array<{ id: string; name: string; learnerCount: number }>;
+    assert.equal(
+      movedGroups.find((row) => row.id === recreatedGroup.id)?.learnerCount,
+      0,
+      "a manual group change should remove the learner from their old group after a reload",
+    );
+    assert.equal(
+      movedGroups.find((row) => row.id === allContent.id)?.learnerCount,
+      allContentLearnersBeforeMove + 1,
+      "a manual group change should count the learner in their new group",
+    );
 
     const coursesResponse = await fetch(`${baseUrl}/curriculum/list`);
     assert.equal(coursesResponse.status, 200);
@@ -215,14 +285,15 @@ test("admin user workspace is authorized, persistent, and duplicate-safe", async
     const groupCatalog = await fetch(`${baseUrl}/curriculum/groups`);
     assert.equal(groupCatalog.status, 200);
     const existingGroups = await groupCatalog.json() as Array<{ id: string; name: string }>;
-    temporaryGroupId = existingGroups.find((row) => row.name === group)?.id ?? null;
     assert.ok(temporaryGroupId, "import should create its missing group");
   } finally {
-    if (importedUserId || temporaryGroupId) {
+    if (importedUserId || legacyUserId || temporaryGroupId) {
       if (importedUserId && !/^u-import-[0-9a-f-]+$/.test(importedUserId)) throw new Error("Unexpected test user ID");
-      if (temporaryGroupId && !/^g-import-[0-9a-f-]+$/.test(temporaryGroupId)) throw new Error("Unexpected test group ID");
+      if (legacyUserId && !/^u-legacy-[0-9a-f-]+$/.test(legacyUserId)) throw new Error("Unexpected legacy test user ID");
+      if (temporaryGroupId && !/^g-(?:import-[0-9a-f-]+|[0-9]+)$/.test(temporaryGroupId)) throw new Error("Unexpected test group ID");
       const cleanupSql = [
         importedUserId ? `DELETE FROM users WHERE id = '${importedUserId}';` : "",
+        legacyUserId ? `DELETE FROM users WHERE id = '${legacyUserId}';` : "",
         temporaryGroupId ? `DELETE FROM groups WHERE id = '${temporaryGroupId}';` : "",
       ].filter(Boolean).join("\n");
       const cleanup = spawnSync("psql", [process.env.DATABASE_URL ?? ""], { input: cleanupSql, encoding: "utf8" });

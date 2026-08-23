@@ -63,6 +63,7 @@ export const users = pgTable("users", {
   name:         text("name").notNull(),
   email:        text("email").notNull().unique(),
   role:         text("role").default("student"),   // admin | faculty | student
+  groupId:      text("group_id").references(() => groups.id, { onDelete: "set null" }),
   groupName:    text("group_name").default(""),
   status:       text("status").default("Active"),
   lastActivity: text("last_activity").default("Never"),

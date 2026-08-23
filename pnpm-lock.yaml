@@ -159,7 +159,7 @@ importers:
     dependencies:
       '@mux/mux-player-react':
         specifier: ^3.13.2
-        version: 3.13.2(@types/react@19.2.17)(react-dom@19.1.4(react@19.1.4))(react@19.1.4)
+        version: 3.13.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.1.4(react@19.1.4))(react@19.1.4)
       '@replit/connectors-sdk':
         specifier: ^0.4.1
         version: 0.4.1
@@ -268,6 +268,9 @@ importers:
       '@hookform/resolvers':
         specifier: ^3.10.0
         version: 3.10.0(react-hook-form@7.83.0(react@19.1.4))
+      '@mux/mux-player-react':
+        specifier: ^3.13.2
+        version: 3.13.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.1.4(react@19.1.4))(react@19.1.4)
       '@radix-ui/react-accordion':
         specifier: ^1.2.4
         version: 1.2.20(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.1.4(react@19.1.4))(react@19.1.4)
@@ -4161,7 +4164,7 @@ snapshots:
     dependencies:
       mux-embed: 5.18.1
 
-  '@mux/mux-player-react@3.13.2(@types/react@19.2.17)(react-dom@19.1.4(react@19.1.4))(react@19.1.4)':
+  '@mux/mux-player-react@3.13.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.1.4(react@19.1.4))(react@19.1.4)':
     dependencies:
       '@mux/mux-player': 3.13.2(react@19.1.4)
       '@mux/playback-core': 0.35.2
@@ -4170,6 +4173,7 @@ snapshots:
       react-dom: 19.1.4(react@19.1.4)
     optionalDependencies:
       '@types/react': 19.2.17
+      '@types/react-dom': 19.2.3(@types/react@19.2.17)
 
   '@mux/mux-player@3.13.2(react@19.1.4)':
     dependencies:
