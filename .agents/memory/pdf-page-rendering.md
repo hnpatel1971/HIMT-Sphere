@@ -45,6 +45,15 @@ managed provider with its own short-lived authorization handoff.
 
 ---
 
+**Published document rendering needs `poppler-utils`, not only the `poppler` library package.**
+`pdfinfo` and `pdftoppm` are supplied by `poppler-utils`; the production runtime can have LibreOffice while still lacking these executables when only `poppler` is declared.
+
+**Why:** A missing `pdfinfo` makes a valid PDF enter the LibreOffice fallback, which then reports a secondary conversion error and hides the real missing-binary problem.
+
+**How to apply:** Include `poppler-utils` in the managed `.replit` Nix packages and verify the production startup renderer check reports both Poppler commands as available. Keep the LibreOffice isolated-profile flag in its single-dash `-env:UserInstallation=...` form.
+
+---
+
 **Protected document page-count responses must never be cached, and renderer failures must remain observable.**
 The page-count endpoint sets protected no-store headers and its browser request uses `cache: "no-store"`. A page-count failure is a server error with renderer logging, not an `isPdf: false` format classification.
 

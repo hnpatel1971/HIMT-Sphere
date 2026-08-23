@@ -147,7 +147,7 @@ async function convertToPdf(inputPath: string, outDir: string): Promise<string> 
   const profileDir = join(tmpdir(), `lo-profile-${randomUUID()}`);
   try {
     await exec(SOFFICE, [
-      `--env:UserInstallation=file://${profileDir}`,
+      `-env:UserInstallation=file://${profileDir}`,
       "--headless",
       "--norestore",
       "--convert-to", "pdf:writer_pdf_Export",
