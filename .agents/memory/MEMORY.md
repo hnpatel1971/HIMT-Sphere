@@ -11,3 +11,4 @@
 - [Document DRM page-image rendering](pdf-page-rendering.md) — documents are rendered server-side; external interactive publications stay unavailable until privately migrated.
 - [Protected document schema compatibility](protected-document-schema-compatibility.md) — document delivery projects stable fields so lagging video schema columns cannot block protected PDFs.
 - [Learner group identities](learner-group-identities.md) — memberships use durable group IDs; legacy labels are migration-only compatibility.
+- [Development schema push ownership](development-schema-push-ownership.md) — align stable constraint names and exclude externally owned session storage from Drizzle diffs.

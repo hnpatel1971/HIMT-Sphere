@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, integer, bigint, boolean, timestamp, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, bigint, boolean, timestamp, jsonb, foreignKey, uniqueIndex } from "drizzle-orm/pg-core";
 
 // ─── Curriculum management ────────────────────────────────────────────────────
 
@@ -84,12 +84,17 @@ export const learnerIdentities = pgTable("learner_identities", {
 
 export const learnerCourseAccess = pgTable("learner_course_access", {
   id:          text("id").primaryKey(),
-  clerkUserId: text("clerk_user_id").notNull().references(() => learnerIdentities.clerkUserId, { onDelete: "cascade" }),
+  clerkUserId: text("clerk_user_id").notNull(),
   courseId:    text("course_id").notNull(),
   expiresAt:   timestamp("expires_at"),    // DRM-006: null = no expiry; set to restrict time-limited access
   createdAt:   timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("learner_course_access_identity_course_unique").on(table.clerkUserId, table.courseId),
+  foreignKey({
+    columns: [table.clerkUserId],
+    foreignColumns: [learnerIdentities.clerkUserId],
+    name: "learner_course_access_clerk_user_id_learner_identities_clerk_us",
+  }).onDelete("cascade"),
 ]);
 
 /** Admin-managed course assignments. These exist before a learner's first Clerk sign-in. */
@@ -338,7 +343,7 @@ export const courseStructureImportJobs = pgTable("course_structure_import_jobs",
 
 export const courseStructureImportJobItems = pgTable("course_structure_import_job_items", {
   id:                text("id").primaryKey(),
-  jobId:             text("job_id").notNull().references(() => courseStructureImportJobs.id, { onDelete: "cascade" }),
+  jobId:             text("job_id").notNull(),
   courseId:          text("course_id").notNull(),
   courseName:        text("course_name").notNull(),
   status:            text("status").notNull().default("pending"),
@@ -350,7 +355,13 @@ export const courseStructureImportJobItems = pgTable("course_structure_import_jo
   finishedAt:        timestamp("finished_at"),
   createdAt:         timestamp("created_at").defaultNow().notNull(),
   updatedAt:         timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  foreignKey({
+    columns: [table.jobId],
+    foreignColumns: [courseStructureImportJobs.id],
+    name: "course_structure_import_job_items_job_id_course_structure_impor",
+  }).onDelete("cascade"),
+]);
 
 // ─── TriByte learning resources & resource-import jobs ────────────────────────
 
@@ -360,7 +371,7 @@ export const courseResources = pgTable("course_resources", {
   topicId:         text("topic_id"),                   // course_topics.id, when attached to a topic
   subtopicId:      text("subtopic_id"),                // course_subtopics.id, when attached to a sub-topic
   sourceNid:       text("source_nid").default(""),     // TriByte node containing the resource
-  sourceIdentity:  text("source_identity").notNull().unique(),
+  sourceIdentity:  text("source_identity").notNull(),
   sourceUrl:       text("source_url").notNull(),
   title:           text("title").notNull(),
   resourceType:    text("resource_type").notNull().default("Learning resource"),
@@ -384,7 +395,11 @@ export const courseResources = pgTable("course_resources", {
   error:           text("error"),
   createdAt:       timestamp("created_at").defaultNow().notNull(),
   updatedAt:       timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  // Keep the name used by the existing populated development table. Using
+  // .unique() here makes Drizzle see a new constraint and offer truncation.
+  uniqueIndex("course_resources_source_identity_key").on(table.sourceIdentity),
+]);
 
 export const courseResourceImportJobs = pgTable("course_resource_import_jobs", {
   id:                text("id").primaryKey(),
@@ -405,7 +420,7 @@ export const courseResourceImportJobs = pgTable("course_resource_import_jobs", {
 
 export const courseResourceImportJobItems = pgTable("course_resource_import_job_items", {
   id:                 text("id").primaryKey(),
-  jobId:              text("job_id").notNull().references(() => courseResourceImportJobs.id, { onDelete: "cascade" }),
+  jobId:              text("job_id").notNull(),
   courseId:           text("course_id").notNull(),
   courseName:         text("course_name").notNull(),
   status:             text("status").notNull().default("pending"),
@@ -419,7 +434,13 @@ export const courseResourceImportJobItems = pgTable("course_resource_import_job_
   finishedAt:         timestamp("finished_at"),
   createdAt:          timestamp("created_at").defaultNow().notNull(),
   updatedAt:          timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  foreignKey({
+    columns: [table.jobId],
+    foreignColumns: [courseResourceImportJobs.id],
+    name: "course_resource_import_job_items_job_id_course_resource_import_",
+  }).onDelete("cascade"),
+]);
 
 // ─── Application settings (key-value store) ──────────────────────────────────
 
