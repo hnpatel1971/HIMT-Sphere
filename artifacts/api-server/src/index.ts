@@ -4,7 +4,9 @@ import {
   ensureAccessLogsTable,
   ensureAppSettingsTable,
   ensureContentTokensTable,
+  ensureResourceImportJobSchema,
   ensureUserWorkspaceTables,
+  scheduleImportRecovery,
 } from "./routes/lms";
 
 const rawPort = process.env["PORT"];
@@ -27,6 +29,7 @@ Promise.all([
   ensureAppSettingsTable(),
   ensureAccessLogsTable(),
   ensureContentTokensTable(),
+  ensureResourceImportJobSchema(),
   ensureUserWorkspaceTables(),
 ])
   .catch(err => {
@@ -34,6 +37,7 @@ Promise.all([
     process.exit(1);
   })
   .then(() => {
+    scheduleImportRecovery();
     app.listen(port, (err) => {
       if (err) {
         logger.error({ err }, "Error listening on port");

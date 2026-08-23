@@ -5081,12 +5081,77 @@ router.get("/curriculum/resources/:resourceId/open/page/:pageNum", async (req, r
   }
 });
 
-setTimeout(() => { void resumeStructureImportJobs(); }, 1_000);
-setTimeout(() => {
-  void resumeResourceImportJobs().catch(error => {
-    logger.error({ error: publicResourceImportError(error) }, "Could not resume resource import jobs");
-  });
-}, 1_200);
+/**
+ * Verify the columns used by the resumable resource-import job before the
+ * server starts scheduling recovery. These columns are managed by the Drizzle
+ * schema and must be applied through the supported database schema update
+ * flow; the application deliberately does not mutate production schema at
+ * startup.
+ */
+export async function ensureResourceImportJobSchema(): Promise<void> {
+  const requiredColumns = [
+    ["course_resource_import_jobs", "id"],
+    ["course_resource_import_jobs", "status"],
+    ["course_resource_import_jobs", "total_courses"],
+    ["course_resource_import_jobs", "completed_courses"],
+    ["course_resource_import_jobs", "imported_resources"],
+    ["course_resource_import_jobs", "failed_resources"],
+    ["course_resource_import_jobs", "unavailable_resources"],
+    ["course_resource_import_jobs", "current_course_id"],
+    ["course_resource_import_jobs", "current_course_name"],
+    ["course_resource_import_jobs", "cancel_requested"],
+    ["course_resource_import_jobs", "started_at"],
+    ["course_resource_import_jobs", "finished_at"],
+    ["course_resource_import_jobs", "created_at"],
+    ["course_resource_import_jobs", "updated_at"],
+    ["course_resource_import_job_items", "id"],
+    ["course_resource_import_job_items", "job_id"],
+    ["course_resource_import_job_items", "course_id"],
+    ["course_resource_import_job_items", "course_name"],
+    ["course_resource_import_job_items", "status"],
+    ["course_resource_import_job_items", "discovered_resources"],
+    ["course_resource_import_job_items", "imported_resources"],
+    ["course_resource_import_job_items", "failed_resources"],
+    ["course_resource_import_job_items", "unavailable_resources"],
+    ["course_resource_import_job_items", "error"],
+    ["course_resource_import_job_items", "attempts"],
+    ["course_resource_import_job_items", "started_at"],
+    ["course_resource_import_job_items", "finished_at"],
+    ["course_resource_import_job_items", "created_at"],
+    ["course_resource_import_job_items", "updated_at"],
+  ] as const;
+  const result = await pool.query<{ table_name: string; column_name: string }>(`
+    SELECT table_name, column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name IN ('course_resource_import_jobs', 'course_resource_import_job_items')
+  `);
+  const present = new Set(result.rows.map(row => `${row.table_name}.${row.column_name}`));
+  const missing = requiredColumns
+    .filter(([tableName, columnName]) => !present.has(`${tableName}.${columnName}`))
+    .map(([tableName, columnName]) => `${tableName}.${columnName}`);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Resource import schema is incomplete; missing ${missing.join(", ")}. ` +
+      "Apply the current @workspace/db schema before starting the API so interrupted imports can resume.",
+    );
+  }
+}
+
+/**
+ * Start background recovery only after all startup schema checks have passed.
+ * Keeping this out of module initialisation prevents a slow schema check from
+ * racing the recovery timers and producing a misleading missing-column error.
+ */
+export function scheduleImportRecovery(): void {
+  setTimeout(() => { void resumeStructureImportJobs(); }, 1_000);
+  setTimeout(() => {
+    void resumeResourceImportJobs().catch(error => {
+      logger.error({ error: publicResourceImportError(error) }, "Could not resume resource import jobs");
+    });
+  }, 1_200);
+}
 
 /**
  * POST /api/curriculum/sync-tribyte

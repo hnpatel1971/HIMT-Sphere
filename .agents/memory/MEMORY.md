@@ -2,6 +2,7 @@
 - [DB-backed LMS architecture](lms-db-architecture.md) — all curriculum pages now call real API; seed runs once on server start.
 - [TriByte admin access & scraping](tribyte-access.md) — login approach, all 95 real courses imported, exact button→URL mapping for all 6 course card actions.
 - [TriByte bulk structure imports](tribyte-bulk-imports.md) — resumable bulk migration defaults to preserving existing LMS structures.
+- [Resource-import recovery schema gates](resource-import-recovery-schema-gates.md) — validate the full job row before scheduling recovery; production schema stays publish-managed.
 - [Bundled session-store assets](bundled-session-store-assets.md) — the API bundle must retain connect-pg-simple's SQL schema beside its entry point.
 - [Clerk learner auth routing](clerk-learner-auth-routing.md) — mount Clerk inside the Wouter router so its path callbacks keep browser and API sessions aligned.
 - [TriByte resource migration coverage](tribyte-resource-migration-coverage.md) — scan the full hierarchy; Preview links are source hints, not resources without record-level evidence.
