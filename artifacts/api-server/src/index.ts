@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { logDocumentRendererRuntime } from "./lib/pdf-renderer";
 import {
   ensureAccessLogsTable,
   ensureAppSettingsTable,
@@ -38,6 +39,7 @@ Promise.all([
   })
   .then(() => {
     scheduleImportRecovery();
+    void logDocumentRendererRuntime();
     app.listen(port, (err) => {
       if (err) {
         logger.error({ err }, "Error listening on port");

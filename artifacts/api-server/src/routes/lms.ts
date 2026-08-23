@@ -4845,7 +4845,7 @@ router.get("/curriculum/resources/:resourceId/admin-view/page-count", async (req
     await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: pageCount !== null ? "view_success" : "view_error", outcomeDetail: pageCount !== null ? `doc_session:${pageCount}pp` : "page_count_null" });
     res.json({ pageCount, isPdf: pageCount !== null });
   } catch (error) {
-    logger.error({ error }, "admin page-count failed");
+    logger.error({ err: error }, "admin page-count failed");
     res.status(500).json({ error: "Could not determine page count" });
   }
 });
@@ -5006,7 +5006,7 @@ router.get("/curriculum/resources/:resourceId/open/page-count", async (req, res)
     await logContentAccess({ req, resourceId: resource.id, courseId: resource.courseId, action: pageCount !== null ? "view_success" : "view_error", outcomeDetail: pageCount !== null ? `doc_session:${pageCount}pp` : "page_count_null" });
     res.json({ pageCount, isPdf: pageCount !== null });
   } catch (error) {
-    logger.error({ error }, "learner page-count failed");
+    logger.error({ err: error }, "learner page-count failed");
     res.status(500).json({ error: "Could not determine page count" });
   }
 });

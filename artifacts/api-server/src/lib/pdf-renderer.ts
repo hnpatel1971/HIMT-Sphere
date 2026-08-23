@@ -76,6 +76,36 @@ function exec(bin: string, args: string[]): Promise<string> {
   });
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Report whether the production process can resolve the binaries required by
+ * protected document rendering. This is diagnostic-only: an unavailable
+ * renderer must not prevent the rest of the LMS from starting.
+ */
+export async function logDocumentRendererRuntime(): Promise<void> {
+  const checks = await Promise.all([
+    exec("pdfinfo", ["-v"]),
+    exec("pdftoppm", ["-v"]),
+    exec(SOFFICE, ["--version"]),
+  ].map(async (check) => {
+    try {
+      await check;
+      return { available: true };
+    } catch (error) {
+      return { available: false, error: errorMessage(error) };
+    }
+  }));
+
+  logger.info({
+    pdfinfo: checks[0],
+    pdftoppm: checks[1],
+    soffice: checks[2],
+  }, "Protected document renderer runtime check");
+}
+
 async function streamToFile(readable: Readable, dest: string): Promise<void> {
   const ws = createWriteStream(dest);
   await pipeline(readable, ws);
@@ -270,7 +300,7 @@ export async function getPageCountFromStream(
     const pdfPath = await ensurePdf(inputPath, dir);
     return await getPageCountFromFile(pdfPath);
   } catch (error) {
-    logger.error({ error, mimeType }, "Protected document page-count rendering failed");
+    logger.error({ err: error, mimeType }, "Protected document page-count rendering failed");
     throw error;
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});

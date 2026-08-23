@@ -382,6 +382,11 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
 
   if (isPdf === false) {
     if (accessError) {
+      const accessTitle = accessError.status === 401
+        ? 'Sign-in required to preview this document.'
+        : accessError.status === 403
+          ? 'Document access is not available for this account.'
+          : 'Document preview is temporarily unavailable.';
       const accessMessage = accessError.status === 401
         ? 'Sign in with your administrator account or enrolled learner account to open this protected document.'
         : accessError.status === 403
@@ -391,7 +396,7 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
         <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-gray-400">
           <LockKeyhole size={28} className="text-amber-400" />
           <span data-testid="text-document-access-error" className="text-sm font-medium text-gray-200">
-            {accessError.status === 401 ? 'Sign-in required to preview this document.' : 'Document access is not available for this account.'}
+            {accessTitle}
           </span>
           <span className="max-w-md text-xs leading-relaxed text-gray-400">{accessMessage}</span>
         </div>
