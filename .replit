@@ -22,3 +22,6 @@ timeoutMs = 20000
 [nix]
 channel = "stable-25_05"
 packages = ["libreoffice", "poppler", "poppler-utils"]
+
+[objectStorage]
+defaultBucketID = "replit-objstore-d6ef7c4f-7e26-46c5-b756-ddfeeec52b71"
