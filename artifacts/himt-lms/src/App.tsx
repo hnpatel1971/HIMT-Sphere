@@ -23,7 +23,7 @@ async function apiFetch<T = unknown>(path: string, method = 'GET', body?: unknow
   if (!r.ok) throw new Error(await r.text());
   return r.json() as Promise<T>;
 }
-// ── DRM-003: per-request content token helpers ────────────────────────────────
+// ── Protected-content per-request token helpers ───────────────────────────────
 /** Issue a one-time 60 s content token for the given resource from the server. */
 async function issueContentToken(resourceId: string): Promise<string> {
   const response = await fetch(`${API}/curriculum/resources/${resourceId}/token`, {
@@ -40,7 +40,7 @@ async function issueContentToken(resourceId: string): Promise<string> {
   return body.token;
 }
 /**
- * Fetch a DRM-protected endpoint with a fresh one-time token in the Authorization header.
+ * Fetch a protected endpoint with a fresh one-time token in the Authorization header.
  * Retries once on 403 in the rare case of a token race (two concurrent fetches).
  */
 async function fetchWithContentToken(
@@ -509,7 +509,6 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
   type PlaybackSession = {
     playbackId: string;
     playbackToken: string;
-    drmToken: string;
     viewerSessionId: string;
     expiresAt: string;
     positionSeconds: number;
@@ -581,7 +580,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
   const mediaFromEvent = (event: Event): HTMLMediaElement | null =>
     event.currentTarget as unknown as HTMLMediaElement | null;
 
-  // ── DRM: block print / save shortcuts and blank the page on @media print ──
+  // ── Protected content: block print / save shortcuts and blank the page on print ──
   useEffect(() => {
     const blockShortcuts = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
@@ -636,7 +635,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
         <MuxPlayer
           ref={muxPlayerRef}
           playbackId={playback.playbackId}
-          tokens={{ playback: playback.playbackToken, drm: playback.drmToken }}
+          tokens={{ playback: playback.playbackToken }}
           autoPlay
           disablePictureInPicture
           onLoadedMetadata={e => {
@@ -656,7 +655,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
             if (media) setPlaybackRate(String(media.playbackRate));
           }}
           onError={() => {
-            setFetchErr('Protected playback could not start on this device. Use a current browser with Widevine, FairPlay, or PlayReady support.');
+            setFetchErr('Signed adaptive playback could not start on this device. Please use a current browser and try again.');
             setFetchState('error');
           }}
           metadata={{ video_id: resource.id, video_title: resource.title }}

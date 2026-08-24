@@ -32,11 +32,12 @@ import {
 import { inspectStoredResource, resumeStoredResourceImport } from "../lib/resource-recovery";
 import { renderProtectedPage, getAccessibleTextFromStream, getPageCountFromStream } from "../lib/pdf-renderer";
 import {
-  createMuxDrmAsset,
-  createMuxPlaybackTokens,
+  createMuxSignedAsset,
+  createMuxSignedPlaybackId,
+  createMuxPlaybackToken,
   findMuxAssetByExternalId,
   getMuxAsset,
-  isMuxDrmConfigured,
+  isMuxSignedPlaybackConfigured,
   MuxConfigurationError,
   MuxProviderError,
 } from "../lib/mux-video";
@@ -4138,7 +4139,7 @@ router.post("/curriculum/resources/:resourceId/token", async (req, res) => {
   res.json({ token, expiresAt: expiresAt.toISOString() });
 });
 
-// ─── Mux multi-DRM video playback ─────────────────────────────────────────────
+// ─── Mux signed adaptive video playback ───────────────────────────────────────
 
 type MuxProvisionedAsset = {
   assetId: string;
@@ -4150,10 +4151,10 @@ type MuxProvisionedAsset = {
 const muxProvisioning = new Map<string, Promise<MuxProvisionedAsset>>();
 
 async function provisionMuxAsset(resource: typeof courseResourcesTable.$inferSelect): Promise<MuxProvisionedAsset> {
-  if (!isMuxDrmConfigured()) {
+  if (!isMuxSignedPlaybackConfigured()) {
     await db.update(courseResourcesTable).set({
       drmStatus: "configuration_required",
-      drmError: "Mux DRM configuration is not available",
+      drmError: "Mux signed playback configuration is not available",
       drmUpdatedAt: new Date(),
       updatedAt: new Date(),
     }).where(eq(courseResourcesTable.id, resource.id));
@@ -4162,7 +4163,7 @@ async function provisionMuxAsset(resource: typeof courseResourcesTable.$inferSel
   if (!resource.storagePath) {
     await db.update(courseResourcesTable).set({
       drmStatus: "unsupported",
-      drmError: "Only privately stored HIMT recordings can be provisioned to Mux DRM",
+      drmError: "Only privately stored HIMT recordings can be provisioned to signed Mux playback",
       drmUpdatedAt: new Date(),
       updatedAt: new Date(),
     }).where(eq(courseResourcesTable.id, resource.id));
@@ -4194,7 +4195,14 @@ async function provisionMuxAsset(resource: typeof courseResourcesTable.$inferSel
       };
 
       if (current.drmProvider === "mux" && current.drmAssetId) {
-        const asset = await getMuxAsset(current.drmAssetId);
+        let asset = await getMuxAsset(current.drmAssetId);
+        if (!asset.playbackId && asset.status !== "errored" && asset.status !== "failed") {
+          // Assets created by the previous DRM-only path may still be useful.
+          // Add a signed playback ID rather than exposing the old DRM ID or
+          // creating a duplicate asset.
+          await createMuxSignedPlaybackId(asset.assetId);
+          asset = await getMuxAsset(asset.assetId);
+        }
         await persist(asset);
         return asset;
       }
@@ -4218,7 +4226,7 @@ async function provisionMuxAsset(resource: typeof courseResourcesTable.$inferSel
 
       // The signed storage URL is an ingestion credential only. It lives long
       // enough for a large source import but never leaves this server process.
-      const asset = await createMuxDrmAsset(
+      const asset = await createMuxSignedAsset(
         await getStoredResourceReadUrl(current.storagePath, 24 * 60 * 60 * 1000),
         current.title,
         resource.id,
@@ -4269,8 +4277,8 @@ function scheduleMuxProvision(resourceId: string): void {
 }
 
 async function provisionExistingMuxVideos(): Promise<void> {
-  if (!isMuxDrmConfigured()) {
-    logger.warn("Mux DRM secrets are not configured; protected videos will remain unavailable until configured");
+  if (!isMuxSignedPlaybackConfigured()) {
+    logger.warn("Mux signed playback secrets are not configured; protected videos will remain unavailable until configured");
     return;
   }
   const resources = (await db.select().from(courseResourcesTable)
@@ -4358,7 +4366,7 @@ router.post("/curriculum/resources/:resourceId/playback-session", async (req, re
   }
   if (!resource.storagePath) {
     // YouTube/Vimeo and other external providers are deliberately not presented
-    // as protected playback. A managed multi-DRM provider migration is required.
+    // as protected playback. A managed adaptive-provider migration is required.
     await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "adaptive_provider_required" });
     res.status(409).json({
       error: "This video is not available through HIMT protected playback.",
@@ -4389,17 +4397,16 @@ router.post("/curriculum/resources/:resourceId/playback-session", async (req, re
     // Renewal repeats the enrollment and revocation check before Mux receives
     // another valid playback or license token.
     const expiresAt = new Date(Math.min(viewerSession.expiresAt.getTime(), Date.now() + 75_000));
-    const tokens = createMuxPlaybackTokens(muxAsset.playbackId, expiresAt);
+    const playbackToken = createMuxPlaybackToken(muxAsset.playbackId, expiresAt);
     const clerkUserId = getAuth(req).userId;
     const [progress] = clerkUserId
       ? await db.select().from(protectedPlaybackProgressTable)
         .where(and(eq(protectedPlaybackProgressTable.userId, clerkUserId), eq(protectedPlaybackProgressTable.resourceId, resourceId)))
       : [];
-    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "mux_drm_playback_session" });
+    await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_success", outcomeDetail: "mux_signed_playback_session" });
     res.json({
       playbackId: muxAsset.playbackId,
-      playbackToken: tokens.playback,
-      drmToken: tokens.drm,
+      playbackToken,
       viewerSessionId: viewerSession.id,
       expiresAt: expiresAt.toISOString(),
       positionSeconds: progress?.positionSeconds ?? 0,
@@ -4408,7 +4415,7 @@ router.post("/curriculum/resources/:resourceId/playback-session", async (req, re
         : null,
       transcript: resource.transcript ?? null,
       provider: "mux",
-      drm: ["widevine", "fairplay", "playready"],
+      delivery: "signed-adaptive",
     });
   } catch (error) {
     const configurationError = error instanceof MuxConfigurationError;
@@ -4419,10 +4426,10 @@ router.post("/curriculum/resources/:resourceId/playback-session", async (req, re
       action: "view_error",
       outcomeDetail: configurationError ? "mux_configuration_required" : "mux_provisioning_failed",
     });
-    logger.error({ error }, "Could not prepare Mux DRM playback");
+    logger.error({ error }, "Could not prepare Mux signed playback");
     res.status(configurationError ? 503 : 422).json({
       error: configurationError
-        ? "Protected video is temporarily unavailable while DRM is being configured."
+        ? "Protected video is temporarily unavailable while signed Mux playback is being configured."
         : "This video could not be prepared for protected playback.",
       code: configurationError ? "MUX_CONFIGURATION_REQUIRED" : "MUX_PROVISIONING_FAILED",
     });

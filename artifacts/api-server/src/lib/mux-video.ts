@@ -24,7 +24,7 @@ export type MuxAssetState = {
 };
 
 export class MuxConfigurationError extends Error {
-  constructor(message = "Mux DRM is not configured") {
+  constructor(message = "Mux signed playback is not configured") {
     super(message);
     this.name = "MuxConfigurationError";
   }
@@ -51,11 +51,10 @@ function signingKey(): string {
   return decoded.replace(/\\n/g, "\n");
 }
 
-export function isMuxDrmConfigured(): boolean {
+export function isMuxSignedPlaybackConfigured(): boolean {
   return [
     "MUX_TOKEN_ID",
     "MUX_TOKEN_SECRET",
-    "MUX_DRM_CONFIGURATION_ID",
     "MUX_SIGNING_KEY_ID",
     "MUX_SIGNING_KEY",
   ].every((name) => Boolean(process.env[name]?.trim()));
@@ -65,11 +64,11 @@ function base64url(value: string | Buffer): string {
   return Buffer.from(value).toString("base64url");
 }
 
-function signMuxToken(audience: "v" | "d", playbackId: string, expiresAt: Date): string {
+function signMuxToken(playbackId: string, expiresAt: Date): string {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT", kid: value("MUX_SIGNING_KEY_ID") };
   const payload = {
-    aud: audience,
+    aud: "v",
     sub: playbackId,
     iat: now,
     exp: Math.max(now + 30, Math.floor(expiresAt.getTime() / 1000)),
@@ -81,11 +80,8 @@ function signMuxToken(audience: "v" | "d", playbackId: string, expiresAt: Date):
   return `${unsigned}.${signer.sign(signingKey()).toString("base64url")}`;
 }
 
-export function createMuxPlaybackTokens(playbackId: string, expiresAt: Date): { playback: string; drm: string } {
-  return {
-    playback: signMuxToken("v", playbackId, expiresAt),
-    drm: signMuxToken("d", playbackId, expiresAt),
-  };
+export function createMuxPlaybackToken(playbackId: string, expiresAt: Date): string {
+  return signMuxToken(playbackId, expiresAt);
 }
 
 async function muxRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -113,30 +109,41 @@ async function muxRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
 function muxAssetState(payload: MuxAssetPayload): MuxAssetState {
   const assetId = payload.id;
   if (!assetId) throw new MuxProviderError("Mux did not return an asset ID");
-  const drmPlayback = payload.playback_ids?.find((entry) => entry.policy === "drm")?.id ?? null;
+  const signedPlayback = payload.playback_ids?.find((entry) => entry.policy === "signed")?.id ?? null;
   return {
     assetId,
-    playbackId: drmPlayback,
+    playbackId: signedPlayback,
     status: payload.status ?? "preparing",
     error: payload.errors?.messages?.map((item) => item.message).filter(Boolean).join("; ").slice(0, 500) || null,
   };
 }
 
-export async function createMuxDrmAsset(inputUrl: string, title: string, externalId: string): Promise<MuxAssetState> {
+export async function createMuxSignedAsset(inputUrl: string, title: string, externalId: string): Promise<MuxAssetState> {
   const response = await muxRequest<{ data?: MuxAssetPayload }>("/assets", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      input: [{ url: inputUrl }],
-      advanced_playback_policies: [{
-        policy: "drm",
-        drm_configuration_id: value("MUX_DRM_CONFIGURATION_ID"),
-      }],
+      inputs: [{ url: inputUrl }],
+      playback_policies: ["signed"],
       video_quality: "plus",
       meta: { title: title.slice(0, 512), external_id: externalId.slice(0, 128) },
     }),
   });
   return muxAssetState(response.data ?? {});
+}
+
+export async function createMuxSignedPlaybackId(assetId: string): Promise<string> {
+  const response = await muxRequest<{ data?: MuxPlaybackId }>(
+    `/assets/${encodeURIComponent(assetId)}/playback-ids`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ policy: "signed" }),
+    },
+  );
+  const playbackId = response.data?.id;
+  if (!playbackId) throw new MuxProviderError("Mux did not return a signed playback ID");
+  return playbackId;
 }
 
 export async function getMuxAsset(assetId: string): Promise<MuxAssetState> {
@@ -155,7 +162,9 @@ export async function findMuxAssetByExternalId(externalId: string): Promise<MuxA
     const query = new URLSearchParams({ limit: "100" });
     if (cursor) query.set("cursor", cursor);
     const response = await muxRequest<{ data?: MuxAssetPayload[]; next_cursor?: string }>(`/assets?${query.toString()}`);
-    const existing = response.data?.find((asset) => asset.meta?.external_id === externalId);
+    const matching = response.data?.filter((asset) => asset.meta?.external_id === externalId) ?? [];
+    const existing = matching.find((asset) => asset.playback_ids?.some((entry) => entry.policy === "signed"))
+      ?? matching[0];
     if (existing) return muxAssetState(existing);
     cursor = response.next_cursor;
   } while (cursor);
