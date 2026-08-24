@@ -255,6 +255,15 @@ function Button({ children, onClick, variant = 'primary', testId, type = 'button
 // ─── ResourcePreviewModal ──────────────────────────────────────────────────────
 type PreviewResource = { id: string; title: string; type: string; openUrl: string; sourceUrl?: string | null; hasStoredFile?: boolean; mimeType?: string | null };
 
+function isVideoPreviewResource(resource: Pick<PreviewResource, 'type' | 'mimeType'>): boolean {
+  const type = (resource.type ?? '').trim().toLowerCase();
+  const mimeType = (resource.mimeType ?? '').split(';', 1)[0].trim().toLowerCase();
+  return type === 'video'
+    || type === 'recording'
+    || /\bvideo\b|\brecording\b/.test(type)
+    || mimeType.startsWith('video/');
+}
+
 function getYouTubeId(url: string): string | null {
   const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]{11})/);
   return m?.[1] ?? null;
@@ -495,8 +504,7 @@ function DocumentPageViewer({ resource }: { resource: PreviewResource }) {
 
 function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource; onClose: () => void }) {
   const watermarkUrl = useWatermarkUrl();
-  const MEDIA_TYPES = new Set(['Video', 'Recording']);
-  const isVideo = MEDIA_TYPES.has(resource.type ?? '');
+  const isVideo = isVideoPreviewResource(resource);
   const isStoredDoc = !isVideo;
   type PlaybackSession = {
     playbackId: string;
@@ -678,7 +686,7 @@ function ResourcePreviewModal({ resource, onClose }: { resource: PreviewResource
       {/* Top bar */}
       <div className="flex shrink-0 items-center justify-between gap-4 bg-gray-900 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          {resource.type === 'Video'
+          {isVideo
             ? <Video size={15} className="shrink-0 text-blue-400" />
             : <FileText size={15} className="shrink-0 text-amber-400" />}
           <span className="truncate text-sm font-semibold text-white">{resource.title}</span>

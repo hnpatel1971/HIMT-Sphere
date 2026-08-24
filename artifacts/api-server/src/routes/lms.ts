@@ -4258,7 +4258,7 @@ async function ensureMuxAsset(resource: typeof courseResourcesTable.$inferSelect
  */
 async function queueMuxProvision(resourceId: string): Promise<void> {
   const [resource] = await db.select().from(courseResourcesTable).where(eq(courseResourcesTable.id, resourceId));
-  if (!resource || resource.status !== "ready" || !["Video", "Recording"].includes(resource.resourceType) || !resource.storagePath) return;
+  if (!resource || resource.status !== "ready" || !isVideoResource(resource.resourceType, resource.mimeType) || !resource.storagePath) return;
   await ensureMuxAsset(resource);
 }
 
@@ -4275,7 +4275,7 @@ async function provisionExistingMuxVideos(): Promise<void> {
   }
   const resources = (await db.select().from(courseResourcesTable)
     .where(eq(courseResourcesTable.status, "ready")))
-    .filter((resource) => Boolean(resource.storagePath) && ["Video", "Recording"].includes(resource.resourceType));
+    .filter((resource) => Boolean(resource.storagePath) && isVideoResource(resource.resourceType, resource.mimeType));
 
   // Avoid flooding either Mux or the storage signer during a deployment restart.
   for (let index = 0; index < resources.length; index += 2) {
@@ -4287,6 +4287,15 @@ async function provisionExistingMuxVideos(): Promise<void> {
       }
     }));
   }
+}
+
+function isVideoResource(resourceType?: string | null, mimeType?: string | null): boolean {
+  const normalizedType = (resourceType ?? "").trim().toLowerCase();
+  const normalizedMimeType = (mimeType ?? "").split(";", 1)[0].trim().toLowerCase();
+  return normalizedType === "video"
+    || normalizedType === "recording"
+    || /\bvideo\b|\brecording\b/.test(normalizedType)
+    || normalizedMimeType.startsWith("video/");
 }
 
 function setProtectedContentHeaders(res: import("express").Response, contentType: string): void {
@@ -4344,7 +4353,7 @@ router.post("/curriculum/resources/:resourceId/playback-session", async (req, re
     res.status(authorization.status).json({ error: authorization.error }); return;
   }
   const { resource, session: viewerSession } = authorization;
-  if (!["Video", "Recording"].includes(resource.resourceType)) {
+  if (!isVideoResource(resource.resourceType, resource.mimeType)) {
     res.status(400).json({ error: "This resource is not a video recording" }); return;
   }
   if (!resource.storagePath) {
@@ -4507,7 +4516,7 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
       res.status(404).json({ error: "Resource not found" });
       return;
     }
-    if (resource.resourceType === "Video" || resource.resourceType === "Recording") {
+    if (isVideoResource(resource.resourceType, resource.mimeType)) {
       // Raw MP4 delivery is deliberately disabled. Protected playback is issued
       // through the short-lived encrypted HLS session endpoint above.
       res.status(410).json({
@@ -4529,7 +4538,7 @@ router.get("/curriculum/resources/:resourceId/admin-view", async (req, res) => {
       return;
     }
     // DRM: stored non-media files are served only via the page-image renderer.
-    if (resource.resourceType !== "Video" && resource.resourceType !== "Recording") {
+    if (!isVideoResource(resource.resourceType, resource.mimeType)) {
       await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_stored_document_blocked" });
       res.status(403).json({
         error: "Document content must be accessed through the secure page viewer.",
@@ -4609,7 +4618,7 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
         }
       }
     }
-    if (resource.resourceType === "Video" || resource.resourceType === "Recording") {
+    if (isVideoResource(resource.resourceType, resource.mimeType)) {
       // Never stream stored MP4 bytes through the learner route. A learner must
       // obtain a bound, expiring adaptive playback session instead.
       res.status(410).json({
@@ -4631,7 +4640,7 @@ router.get("/curriculum/resources/:resourceId/open", async (req, res) => {
       return;
     }
     // DRM: stored non-media files are served only via the page-image renderer.
-    if (resource.resourceType !== "Video" && resource.resourceType !== "Recording") {
+    if (!isVideoResource(resource.resourceType, resource.mimeType)) {
       await logContentAccess({ req, resourceId, courseId: resource.courseId, action: "view_denied", outcomeDetail: "drm_stored_document_blocked" });
       res.status(403).json({
         error: "Document content must be accessed through the secure page viewer.",
@@ -4916,7 +4925,7 @@ router.get("/curriculum/resources/:resourceId/open/accessible", async (req, res)
   if (!tokenResult.ok) { res.status(tokenResult.status).json({ error: tokenResult.error }); return; }
   try {
     const resource = await findProtectedDocumentResource(resourceId);
-    if (!resource || resource.status !== "ready" || ["Video", "Recording"].includes(resource.resourceType)) {
+    if (!resource || resource.status !== "ready" || isVideoResource(resource.resourceType, resource.mimeType)) {
       res.status(404).json({ error: "Accessible document is not available" }); return;
     }
     if (!(await learnerCanAccessCourse(req, resource.courseId))) {
